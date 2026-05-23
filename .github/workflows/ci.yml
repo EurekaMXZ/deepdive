@@ -33,6 +33,11 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: Install backend system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git ripgrep
+
       - name: Install backend dependencies
         run: uv sync --frozen
 
