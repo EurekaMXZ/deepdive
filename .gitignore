@@ -219,3 +219,6 @@ __marimo__/
 
 # logs
 logs
+
+# Node / pnpm workspace
+node_modules/

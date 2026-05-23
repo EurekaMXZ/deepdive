@@ -1,0 +1,9 @@
+{
+  "name": "deepdive",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "frontend:build": "pnpm --filter frontend build",
+    "frontend:lint": "pnpm --filter frontend lint"
+  }
+}
