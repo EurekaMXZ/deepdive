@@ -1,0 +1,962 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+from uuid import UUID
+
+from backend.agent.context import ContextAssembler
+from backend.agent.models import AgentSessionState, ModelResponse, ModelToolCall
+from backend.agent.ports import AgentRepository, ResponsesRunner
+from backend.config import AppConfig
+from backend.events import EventEnvelope, EventType
+from backend.events.live_stream import completed_live_payload, model_reasoning_summary_live_payloads
+from backend.execution.permissions import DEFAULT_TOOL_POLICY_HASH
+from backend.execution.tool_registry import DEFAULT_TOOL_REGISTRY_VERSION
+
+
+class CancelledModelStreamError(RuntimeError):
+    pass
+
+
+class AgentCommandHandler:
+    def __init__(
+        self,
+        *,
+        repository: AgentRepository,
+        context_assembler: ContextAssembler,
+        responses_runner: ResponsesRunner,
+        config: AppConfig,
+        model_retry_attempts: int = 3,
+        live_stream_publisher=None,
+    ) -> None:
+        self._repository = repository
+        self._context_assembler = context_assembler
+        self._responses_runner = responses_runner
+        self._config = config
+        self._model_retry_attempts = max(1, int(model_retry_attempts))
+        self._live_stream_publisher = live_stream_publisher
+
+    async def __call__(self, event: EventEnvelope) -> None:
+        if event.event_type in {
+            EventType.SNAPSHOT_READY,
+            EventType.AGENT_CONTINUE_REQUESTED,
+            EventType.TOOL_CALL_COMPLETED,
+            EventType.TOOL_CALL_FAILED,
+            EventType.TOOL_CALL_DENIED,
+        }:
+            await self._run_turn(event)
+            return
+        if event.event_type == EventType.ANALYSIS_CANCEL_REQUESTED:
+            if event.analysis_id and event.agent_id:
+                await self._repository.add_stream_event(
+                    analysis_id=event.analysis_id,
+                    agent_id=event.agent_id,
+                    event_type="status",
+                payload={"status": "cancelled"},
+            )
+            return
+        raise ValueError(f"Unsupported agent event: {event.event_type}")
+
+    async def _run_turn(self, event: EventEnvelope) -> None:
+        if event.analysis_id is None or event.agent_id is None:
+            raise ValueError("Agent event requires analysis_id and agent_id")
+        session = await self._repository.get_session(event.agent_id)
+        if session is None:
+            raise ValueError("Agent session not found")
+        if session.status in TERMINAL_SESSION_STATUSES:
+            return
+        trigger_domain_key = _trigger_domain_key(event)
+        existing_turn = await self._turn_for_trigger(
+            agent_id=session.agent_id,
+            event_id=event.event_id,
+            trigger_domain_key=trigger_domain_key,
+        )
+        if existing_turn is not None:
+            if existing_turn.get("status") == "completed":
+                return
+            recovered = await self._recover_incomplete_turn(event=event, session=session, turn_id=UUID(str(existing_turn["id"])))
+            if recovered:
+                return
+            if _is_retryable_model_turn(existing_turn):
+                await self._run_model_turn(event=event, session=session, turn_id=UUID(str(existing_turn["id"])))
+                return
+            await self._fail_unrecoverable_turn_replay(event=event, session=session, turn_id=UUID(str(existing_turn["id"])))
+            return
+        if session.snapshot_id is None and event.snapshot_id is not None:
+            session = AgentSessionState(
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=event.snapshot_id,
+                config_snapshot_id=session.config_snapshot_id,
+                status=session.status,
+                effective_model=session.effective_model,
+                latest_response_id=session.latest_response_id,
+                turn_count=session.turn_count,
+                max_turns=session.max_turns,
+                effective_limits_json=session.effective_limits_json,
+                effective_runtime_json=session.effective_runtime_json,
+            )
+        if session.snapshot_id is None:
+            raise ValueError("Agent session has no snapshot")
+        if session.turn_count >= session.max_turns:
+            await self._fail_max_turns_exceeded(event=event, session=session)
+            return
+        max_tool_calls = int(session.effective_limits_json.get("max_tool_calls") or 0)
+        if max_tool_calls > 0 and await self._count_tool_calls(agent_id=session.agent_id) >= max_tool_calls:
+            await self._fail_max_tool_calls_exceeded(event=event, session=session, max_tool_calls=max_tool_calls)
+            return
+
+        await self._repository.update_session_status(agent_id=session.agent_id, status="calling_model")
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="status",
+            payload={"status": "calling_model"},
+        )
+        turn_id = await self._repository.start_turn(
+            session=session,
+            trigger_event_id=event.event_id,
+            trigger_domain_key=trigger_domain_key,
+        )
+        await self._run_model_turn(event=event, session=session, turn_id=turn_id)
+
+    async def _run_model_turn(self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID) -> None:
+        use_previous_response_id = bool(
+            session.effective_runtime_json.get("use_previous_response_id", self._config.openai.use_previous_response_id)
+        ) and bool(session.latest_response_id)
+        extra_items = await self._tool_output_items(event, use_previous_response_id=use_previous_response_id)
+        context = await self._context_assembler.assemble(session=session, turn_id=turn_id, extra_items=extra_items)
+        compacted = await self._compact_if_needed(event=event, session=session, context=context)
+        if compacted:
+            use_previous_response_id = False
+            extra_items = await self._tool_output_items(event, use_previous_response_id=False)
+            context = await self._context_assembler.assemble(session=session, turn_id=turn_id, extra_items=extra_items)
+            if self._context_exceeds_threshold(session=session, context=context):
+                await self._fail_context_too_large_after_compact(event=event, session=session, turn_id=turn_id, context=context)
+                return
+        live_stream_seq = 0
+        show_reasoning_summary = bool(
+            session.effective_runtime_json.get(
+                "show_reasoning_summary",
+                self._config.openai.show_reasoning_summary,
+            )
+        )
+
+        async def on_raw_sse_event(event_name: str, payload: dict[str, Any]) -> None:
+            nonlocal live_stream_seq
+            live_payload = completed_live_payload(payload) if event_name == "response.completed" else dict(payload)
+            response_id = live_payload.get("response_id") or payload.get("response_id")
+            if event_name == "response.completed" and show_reasoning_summary:
+                for summary_payload in model_reasoning_summary_live_payloads(payload):
+                    await self._persist_model_reasoning_summary(
+                        event_name="model_reasoning_summary",
+                        payload=summary_payload,
+                        session=session,
+                        turn_id=turn_id,
+                        attempt=event.attempt,
+                        response_id=summary_payload.get("response_id") or response_id,
+                    )
+                    if self._live_stream_publisher is not None:
+                        live_stream_seq += 1
+                        try:
+                            await self._live_stream_publisher.publish_event(
+                                analysis_id=session.analysis_id,
+                                agent_id=session.agent_id,
+                                turn_id=turn_id,
+                                attempt=event.attempt,
+                                stream_seq=live_stream_seq,
+                                event_name="model_reasoning_summary",
+                                payload=summary_payload,
+                                response_id=summary_payload.get("response_id") or response_id,
+                            )
+                        except Exception:
+                            return
+            if event_name.startswith("model_reasoning_summary") and not show_reasoning_summary:
+                return
+            if self._live_stream_publisher is None:
+                return
+            live_stream_seq += 1
+            try:
+                await self._live_stream_publisher.publish_event(
+                    analysis_id=session.analysis_id,
+                    agent_id=session.agent_id,
+                    turn_id=turn_id,
+                    attempt=event.attempt,
+                    stream_seq=live_stream_seq,
+                    event_name=event_name,
+                    payload=live_payload,
+                    response_id=response_id,
+                )
+            except Exception:
+                return
+
+        reasoning = {
+            "effort": session.effective_runtime_json.get(
+                "reasoning_effort",
+                self._config.openai.reasoning_effort,
+            )
+        }
+        reasoning_summary = str(
+            session.effective_runtime_json.get(
+                "reasoning_summary",
+                self._config.openai.reasoning_summary,
+            )
+            or ""
+        ).strip()
+        if reasoning_summary and reasoning_summary.lower() != "none":
+            reasoning["summary"] = reasoning_summary
+
+        request = {
+            "model": session.effective_model,
+            "instructions": context["instructions"],
+            "input": context["input"],
+            "tools": context["tool_schema"],
+            "parallel_tool_calls": bool(session.effective_runtime_json.get("parallel_tool_calls", False)),
+            "reasoning": reasoning,
+            "service_tier": session.effective_runtime_json.get("service_tier", self._config.openai.service_tier),
+            "on_raw_sse_event": on_raw_sse_event,
+        }
+        if (
+            not compacted
+            and use_previous_response_id
+        ):
+            request["previous_response_id"] = session.latest_response_id
+        try:
+            response = await self._responses_runner.create_response(request)
+        except CancelledModelStreamError:
+            return
+        except Exception as exc:
+            if _is_retryable_model_exception(exc) and event.attempt < self._model_retry_attempts:
+                await self._repository.add_stream_event(
+                    analysis_id=session.analysis_id,
+                    agent_id=session.agent_id,
+                    event_type="attempt_failed",
+                    payload={
+                        "turn_id": str(turn_id),
+                        "attempt": event.attempt,
+                        "error_code": type(exc).__name__,
+                        "message": _safe_error_message(exc),
+                        "retryable": True,
+                        "supersedes_stream_deltas": True,
+                    },
+                    turn_id=turn_id,
+                    attempt=event.attempt,
+                    state="failed",
+                )
+                raise
+            await self._fail_model_call(event=event, session=session, turn_id=turn_id, exc=exc)
+            return
+        refreshed_session = await self._repository.get_session(session.agent_id)
+        if refreshed_session is None or refreshed_session.status in TERMINAL_SESSION_STATUSES or refreshed_session.status == "cancelling":
+            return
+        session = refreshed_session
+        output_ref = self._store_model_output(session=session, turn_id=turn_id, response=response)
+
+        if response.tool_calls:
+            atomic_tool_call = getattr(self._repository, "complete_turn_with_tool_call", None)
+            await self._handle_tool_call(
+                event=event,
+                session=session,
+                turn_id=turn_id,
+                context=context,
+                tool_call=response.tool_calls[0],
+                completed_turn={
+                    "response_id": response.response_id,
+                    "previous_response_id": session.latest_response_id,
+                    "input_ref": context["input_ref"],
+                    "output_ref": output_ref,
+                    "usage": response.usage,
+                } if atomic_tool_call is not None else None,
+            )
+            if atomic_tool_call is None:
+                await self._repository.update_latest_response(agent_id=session.agent_id, response_id=response.response_id)
+                await self._repository.complete_turn(
+                    turn_id=turn_id,
+                    response_id=response.response_id,
+                    previous_response_id=session.latest_response_id,
+                    input_ref=context["input_ref"],
+                    output_ref=output_ref,
+                    output_text=response.output_text,
+                    usage=response.usage,
+                )
+            return
+
+        completed_event = EventEnvelope.new(
+            event_type=EventType.ANALYSIS_COMPLETED,
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            snapshot_id=session.snapshot_id,
+            correlation_id=event.correlation_id,
+            causation_id=event.event_id,
+            payload={"response_id": response.response_id, "output_ref": output_ref},
+        )
+        complete_turn_with_final_answer = getattr(self._repository, "complete_turn_with_final_answer", None)
+        if complete_turn_with_final_answer is not None:
+            completed = await complete_turn_with_final_answer(
+                turn_id=turn_id,
+                response_id=response.response_id,
+                previous_response_id=session.latest_response_id,
+                input_ref=context["input_ref"],
+                output_ref=output_ref,
+                usage=response.usage,
+                latest_response_agent_id=session.agent_id,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                output_text=response.output_text,
+                stream_payload={"status": "completed", "response_id": response.response_id, "output_ref": output_ref},
+                event=completed_event,
+            )
+            if not completed:
+                return
+            return
+
+        await self._repository.update_latest_response(agent_id=session.agent_id, response_id=response.response_id)
+        await self._repository.complete_turn(
+            turn_id=turn_id,
+            response_id=response.response_id,
+            previous_response_id=session.latest_response_id,
+            input_ref=context["input_ref"],
+            output_ref=output_ref,
+            output_text=response.output_text,
+            usage=response.usage,
+        )
+        completed = await self._repository.complete_analysis(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            output_text=response.output_text,
+        )
+        if not completed:
+            return
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="done",
+            payload={"status": "completed", "response_id": response.response_id, "output_ref": output_ref},
+            turn_id=turn_id,
+            response_id=response.response_id,
+            state="completed",
+        )
+        await self._repository.add_outbox(completed_event)
+
+    async def _persist_model_reasoning_summary(
+        self,
+        *,
+        event_name: str,
+        payload: dict[str, Any],
+        session: AgentSessionState,
+        turn_id: UUID,
+        attempt: int,
+        response_id: str | None,
+    ) -> None:
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type=event_name,
+            payload=payload,
+            turn_id=turn_id,
+            attempt=attempt,
+            response_id=response_id,
+        )
+
+    async def _compact_if_needed(self, *, event: EventEnvelope, session: AgentSessionState, context: dict[str, Any]) -> bool:
+        threshold = int(session.effective_limits_json.get("auto_compact_threshold_tokens") or 0)
+        token_estimate = int(context.get("token_estimate") or 0)
+        if threshold <= 0 or token_estimate <= threshold:
+            return False
+        summary = {
+            "goal": "分析仓库源码结构。",
+            "completed_steps": ["已组装当前轮上下文。"],
+            "confirmed_facts": [],
+            "active_hypotheses": [],
+            "open_questions": [],
+            "focus_paths": [],
+            "next_action": "继续基于工具结果分析仓库。",
+        }
+        await self._repository.add_memory_summary(
+            agent_id=session.agent_id,
+            compacted_until_turn=session.turn_count,
+            summary_json=summary,
+            evidence_ids_json=[],
+            focus_paths_json=[],
+            next_action=summary["next_action"],
+        )
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="compact",
+            payload={"token_estimate": token_estimate, "threshold": threshold},
+            state="completed",
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.AGENT_COMPACTED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload={"token_estimate": token_estimate, "threshold": threshold},
+            )
+        )
+        return True
+
+    def _context_exceeds_threshold(self, *, session: AgentSessionState, context: dict[str, Any]) -> bool:
+        threshold = int(session.effective_limits_json.get("auto_compact_threshold_tokens") or 0)
+        token_estimate = int(context.get("token_estimate") or 0)
+        return threshold > 0 and token_estimate > threshold
+
+    async def _tool_output_items(self, event: EventEnvelope, *, use_previous_response_id: bool = False) -> list[dict[str, Any]]:
+        if event.event_type not in {EventType.TOOL_CALL_COMPLETED, EventType.TOOL_CALL_FAILED, EventType.TOOL_CALL_DENIED}:
+            return []
+        tool_call_id = event.payload.get("tool_call_id")
+        if not tool_call_id:
+            return []
+        output = await self._repository.get_pending_tool_output(tool_call_id=UUID(str(tool_call_id)))
+        if output is None and event.event_type in {EventType.TOOL_CALL_FAILED, EventType.TOOL_CALL_DENIED}:
+            error = event.payload.get("error") or {}
+            fallback_code = "TOOL_DENIED" if event.event_type == EventType.TOOL_CALL_DENIED else "TOOL_FAILED"
+            output = {
+                "call_id": str(event.payload.get("openai_call_id") or tool_call_id),
+                "name": str(event.payload.get("tool_name") or "unknown_tool"),
+                "arguments": event.payload.get("arguments") or {},
+                "output": json.dumps(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": str(error.get("code") or fallback_code),
+                            "message": str(error.get("message") or "Tool call failed"),
+                            "retryable": bool(error.get("retryable", False)),
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        if output is None:
+            return []
+        function_output = {
+            "type": "function_call_output",
+            "call_id": output["call_id"],
+            "output": output["output"],
+        }
+        if use_previous_response_id:
+            return [function_output]
+        previous_items = self._previous_output_items(output.get("output_ref"))
+        if previous_items:
+            return previous_items + [function_output]
+        return [
+            {
+                "type": "function_call",
+                "call_id": output["call_id"],
+                "name": output["name"],
+                "arguments": json.dumps(output["arguments"], ensure_ascii=False),
+            },
+            function_output,
+        ]
+
+    def _previous_output_items(self, output_ref: str | None) -> list[dict[str, Any]]:
+        if not output_ref:
+            return []
+        return self._context_assembler.load_model_output_items(output_ref)
+
+    async def _turn_for_trigger(self, *, agent_id: UUID, event_id: UUID, trigger_domain_key: str | None) -> dict[str, Any] | None:
+        get_turn_for_event = getattr(self._repository, "get_turn_for_event", None)
+        if get_turn_for_event is not None:
+            turn = await get_turn_for_event(agent_id=agent_id, event_id=event_id)
+            if turn is not None:
+                return turn
+        if trigger_domain_key:
+            get_turn_for_domain_key = getattr(self._repository, "get_turn_for_domain_key", None)
+            if get_turn_for_domain_key is not None:
+                turn = await get_turn_for_domain_key(agent_id=agent_id, trigger_domain_key=trigger_domain_key)
+                if turn is not None:
+                    return turn
+        if await self._repository.has_turn_for_event(agent_id=agent_id, event_id=event_id):
+            return {"id": event_id, "status": "completed"}
+        return None
+
+    async def _recover_incomplete_turn(self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID) -> bool:
+        get_pending_tool_call_for_turn = getattr(self._repository, "get_pending_tool_call_for_turn", None)
+        if get_pending_tool_call_for_turn is None:
+            return False
+        tool_call = await get_pending_tool_call_for_turn(turn_id=turn_id)
+        if tool_call is None:
+            return False
+        tool_call_id = UUID(str(tool_call["id"]))
+        arguments = tool_call.get("arguments_json") or {}
+        event_envelope = EventEnvelope.new(
+            event_type=EventType.TOOL_CALL_REQUESTED,
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            snapshot_id=UUID(str(tool_call.get("snapshot_id") or session.snapshot_id)),
+            correlation_id=event.correlation_id,
+            causation_id=event.event_id,
+            payload={
+                "tool_call_id": str(tool_call_id),
+                "openai_call_id": tool_call.get("openai_call_id"),
+                "tool_name": tool_call["tool_name"],
+                "arguments": arguments,
+                "recovered": True,
+            },
+        )
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="tool_call",
+            payload={
+                "tool_call_id": str(tool_call_id),
+                "tool_name": tool_call["tool_name"],
+                "arguments": arguments,
+                "recovered": True,
+            },
+            turn_id=turn_id,
+            state="completed",
+        )
+        await self._repository.add_outbox(event_envelope)
+        await self._repository.update_session_status(agent_id=session.agent_id, status="waiting_tool")
+        return True
+
+    async def _count_tool_calls(self, *, agent_id: UUID) -> int:
+        count_tool_calls = getattr(self._repository, "count_tool_calls", None)
+        if count_tool_calls is None:
+            return 0
+        return int(await count_tool_calls(agent_id=agent_id))
+
+    async def _handle_tool_call(
+        self,
+        *,
+        event: EventEnvelope,
+        session: AgentSessionState,
+        turn_id: UUID,
+        context: dict[str, Any],
+        tool_call: ModelToolCall,
+        completed_turn: dict[str, Any] | None = None,
+    ) -> None:
+        if session.snapshot_id is None:
+            raise ValueError("Tool call requires snapshot_id")
+        previous_result = await self._repository.find_completed_tool_call(
+            agent_id=session.agent_id,
+            tool_name=tool_call.name,
+            arguments_json=tool_call.arguments,
+        )
+        if previous_result is not None:
+            duplicate_result = _previous_tool_result_payload(tool_call=tool_call, previous_result=previous_result)
+            event_envelope = EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_COMPLETED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload={
+                    "previous_tool_call_id": str(previous_result["id"]),
+                },
+            )
+            tool_call_kwargs = {
+                "agent_id": session.agent_id,
+                "turn_id": turn_id,
+                "snapshot_id": session.snapshot_id,
+                "openai_call_id": tool_call.call_id,
+                "tool_name": tool_call.name,
+                "arguments_json": tool_call.arguments,
+                "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
+                "tool_schema_hash": context["tool_schema_hash"],
+                "tool_policy_hash": DEFAULT_TOOL_POLICY_HASH,
+                "status": "completed",
+                "result_summary": duplicate_result,
+                "result_ref": previous_result.get("result_ref"),
+            }
+            stream_payload = duplicate_result
+            request_tool_call = getattr(self._repository, "request_tool_call", None)
+            complete_turn_with_tool_call = getattr(self._repository, "complete_turn_with_tool_call", None)
+            if complete_turn_with_tool_call is not None and completed_turn is not None:
+                tool_call_id = await complete_turn_with_tool_call(
+                    turn_id=turn_id,
+                    response_id=completed_turn["response_id"],
+                    previous_response_id=completed_turn["previous_response_id"],
+                    input_ref=completed_turn["input_ref"],
+                    output_ref=completed_turn["output_ref"],
+                    usage=completed_turn["usage"],
+                    latest_response_agent_id=session.agent_id,
+                    tool_call_kwargs=tool_call_kwargs,
+                    analysis_id=session.analysis_id,
+                    agent_id=session.agent_id,
+                    stream_event_type="tool_result",
+                    stream_payload=stream_payload,
+                    event=event_envelope,
+                )
+            elif request_tool_call is not None:
+                tool_call_id = await request_tool_call(
+                    tool_call_kwargs=tool_call_kwargs,
+                    analysis_id=session.analysis_id,
+                    agent_id=session.agent_id,
+                    stream_event_type="tool_result",
+                    stream_payload=stream_payload,
+                    event=event_envelope,
+                )
+            else:
+                tool_call_id = await self._repository.create_tool_call(**tool_call_kwargs)
+                await self._repository.add_stream_event(
+                    analysis_id=session.analysis_id,
+                    agent_id=session.agent_id,
+                    event_type="tool_result",
+                    payload=stream_payload,
+                    turn_id=turn_id,
+                    state="completed",
+                )
+                event_envelope.payload["tool_call_id"] = str(tool_call_id)
+                await self._repository.add_outbox(event_envelope)
+            await self._repository.update_session_status(agent_id=session.agent_id, status="waiting_tool")
+            event_envelope.payload["tool_call_id"] = str(tool_call_id)
+            return
+        tool_call_kwargs = {
+            "agent_id": session.agent_id,
+            "turn_id": turn_id,
+            "snapshot_id": session.snapshot_id,
+            "openai_call_id": tool_call.call_id,
+            "tool_name": tool_call.name,
+            "arguments_json": tool_call.arguments,
+            "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
+            "tool_schema_hash": context["tool_schema_hash"],
+            "tool_policy_hash": DEFAULT_TOOL_POLICY_HASH,
+            "status": "queued",
+        }
+        stream_payload = {
+            "tool_name": tool_call.name,
+            "arguments": tool_call.arguments,
+        }
+        event_envelope = EventEnvelope.new(
+            event_type=EventType.TOOL_CALL_REQUESTED,
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            snapshot_id=session.snapshot_id,
+            correlation_id=event.correlation_id,
+            causation_id=event.event_id,
+            payload={
+                "openai_call_id": tool_call.call_id,
+                "tool_name": tool_call.name,
+                "arguments": tool_call.arguments,
+            },
+        )
+        request_tool_call = getattr(self._repository, "request_tool_call", None)
+        complete_turn_with_tool_call = getattr(self._repository, "complete_turn_with_tool_call", None)
+        if complete_turn_with_tool_call is not None and completed_turn is not None:
+            tool_call_id = await complete_turn_with_tool_call(
+                turn_id=turn_id,
+                response_id=completed_turn["response_id"],
+                previous_response_id=completed_turn["previous_response_id"],
+                input_ref=completed_turn["input_ref"],
+                output_ref=completed_turn["output_ref"],
+                usage=completed_turn["usage"],
+                latest_response_agent_id=session.agent_id,
+                tool_call_kwargs=tool_call_kwargs,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                stream_event_type="tool_call",
+                stream_payload=stream_payload,
+                event=event_envelope,
+            )
+        elif request_tool_call is not None:
+            tool_call_id = await request_tool_call(
+                tool_call_kwargs=tool_call_kwargs,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                stream_event_type="tool_call",
+                stream_payload=stream_payload,
+                event=event_envelope,
+            )
+        else:
+            tool_call_id = await self._repository.create_tool_call(**tool_call_kwargs)
+            stream_payload["tool_call_id"] = str(tool_call_id)
+            await self._repository.add_stream_event(
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                event_type="tool_call",
+                payload=stream_payload,
+                turn_id=turn_id,
+                state="completed",
+            )
+            event_envelope.payload["tool_call_id"] = str(tool_call_id)
+            await self._repository.add_outbox(event_envelope)
+        await self._repository.update_session_status(agent_id=session.agent_id, status="waiting_tool")
+        stream_payload["tool_call_id"] = str(tool_call_id)
+        event_envelope.payload["tool_call_id"] = str(tool_call_id)
+
+    def _store_model_output(self, *, session: AgentSessionState, turn_id: UUID, response: ModelResponse) -> str:
+        return self._context_assembler.store_model_output(session=session, turn_id=turn_id, response=response)
+
+
+    async def _fail_max_turns_exceeded(self, *, event: EventEnvelope, session: AgentSessionState) -> None:
+        message = f"Agent reached max_turns={session.max_turns} before producing a final answer."
+        failed = await self._repository.fail_analysis(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            error_code="MAX_TURNS_EXCEEDED",
+            error_message=message,
+        )
+        if not failed:
+            return
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="error",
+            payload={
+                "error_code": "MAX_TURNS_EXCEEDED",
+                "error_message": message,
+                "turn_count": session.turn_count,
+                "max_turns": session.max_turns,
+            },
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.ANALYSIS_FAILED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload={
+                    "error_code": "MAX_TURNS_EXCEEDED",
+                    "error_message": message,
+                    "turn_count": session.turn_count,
+                    "max_turns": session.max_turns,
+                },
+            )
+        )
+
+    async def _fail_max_tool_calls_exceeded(self, *, event: EventEnvelope, session: AgentSessionState, max_tool_calls: int) -> None:
+        message = f"Agent reached max_tool_calls={max_tool_calls} before producing a final answer."
+        failed = await self._repository.fail_analysis(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            error_code="MAX_TOOL_CALLS_EXCEEDED",
+            error_message=message,
+        )
+        if not failed:
+            return
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="error",
+            payload={
+                "error_code": "MAX_TOOL_CALLS_EXCEEDED",
+                "error_message": message,
+                "turn_count": session.turn_count,
+                "max_tool_calls": max_tool_calls,
+            },
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.ANALYSIS_FAILED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload={
+                    "error_code": "MAX_TOOL_CALLS_EXCEEDED",
+                    "error_message": message,
+                    "turn_count": session.turn_count,
+                    "max_tool_calls": max_tool_calls,
+                },
+            )
+        )
+
+    async def _fail_model_call(self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID, exc: Exception) -> None:
+        message = _safe_error_message(exc)
+        await self._repository.fail_turn(turn_id=turn_id, error_code="MODEL_CALL_FAILED", error_message=message)
+        failed = await self._repository.fail_analysis(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            error_code="MODEL_CALL_FAILED",
+            error_message=message,
+        )
+        if not failed:
+            return
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="error",
+            payload={
+                "error_code": "MODEL_CALL_FAILED",
+                "error_message": message,
+                "turn_count": session.turn_count,
+            },
+            turn_id=turn_id,
+            state="failed",
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.ANALYSIS_FAILED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload={
+                    "error_code": "MODEL_CALL_FAILED",
+                    "error_message": message,
+                    "turn_count": session.turn_count,
+                },
+            )
+        )
+
+    async def _fail_context_too_large_after_compact(
+        self,
+        *,
+        event: EventEnvelope,
+        session: AgentSessionState,
+        turn_id: UUID,
+        context: dict[str, Any],
+    ) -> None:
+        threshold = int(session.effective_limits_json.get("auto_compact_threshold_tokens") or 0)
+        token_estimate = int(context.get("token_estimate") or 0)
+        message = (
+            f"Context token estimate {token_estimate} still exceeds "
+            f"auto_compact_threshold_tokens={threshold} after compaction."
+        )
+        await self._repository.fail_turn(turn_id=turn_id, error_code="CONTEXT_TOO_LARGE_AFTER_COMPACT", error_message=message)
+        failed = await self._repository.fail_analysis(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            error_code="CONTEXT_TOO_LARGE_AFTER_COMPACT",
+            error_message=message,
+        )
+        if not failed:
+            return
+        payload = {
+            "error_code": "CONTEXT_TOO_LARGE_AFTER_COMPACT",
+            "error_message": message,
+            "token_estimate": token_estimate,
+            "threshold": threshold,
+        }
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="error",
+            payload=payload,
+            turn_id=turn_id,
+            state="failed",
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.ANALYSIS_FAILED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload=payload,
+            )
+        )
+
+    async def _fail_unrecoverable_turn_replay(self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID) -> None:
+        message = (
+            "Agent turn was replayed while an earlier attempt for the same event was not completed; "
+            "automatic recovery for partial model calls is not available yet."
+        )
+        await self._repository.fail_turn(
+            turn_id=turn_id,
+            error_code="AGENT_TURN_RECOVERY_REQUIRED",
+            error_message=message,
+        )
+        failed = await self._repository.fail_analysis(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            error_code="AGENT_TURN_RECOVERY_REQUIRED",
+            error_message=message,
+        )
+        if not failed:
+            return
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="error",
+            payload={
+                "error_code": "AGENT_TURN_RECOVERY_REQUIRED",
+                "error_message": message,
+            },
+            turn_id=turn_id,
+            state="failed",
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.ANALYSIS_FAILED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload={
+                    "error_code": "AGENT_TURN_RECOVERY_REQUIRED",
+                    "error_message": message,
+                },
+            )
+        )
+
+
+TERMINAL_SESSION_STATUSES = {"completed", "failed", "cancelled"}
+
+
+def _safe_error_message(exc: Exception) -> str:
+    message = str(exc) or type(exc).__name__
+    return message[:4096]
+
+
+def _previous_tool_result_payload(*, tool_call: ModelToolCall, previous_result: dict[str, Any]) -> dict[str, Any]:
+    result_summary = previous_result.get("result_summary")
+    if isinstance(result_summary, str):
+        try:
+            payload = json.loads(result_summary)
+        except json.JSONDecodeError:
+            payload = {"ok": True, "tool_name": tool_call.name, "result": result_summary}
+    elif isinstance(result_summary, dict):
+        payload = dict(result_summary)
+    else:
+        payload = {"ok": True, "tool_name": tool_call.name, "result": result_summary}
+    payload.setdefault("ok", True)
+    payload.setdefault("tool_name", tool_call.name)
+    payload["reused_from_tool_call_id"] = str(previous_result["id"])
+    if previous_result.get("result_ref") and "result_ref" not in payload:
+        payload["result_ref"] = previous_result["result_ref"]
+    return payload
+
+
+def _is_retryable_model_turn(turn: dict[str, Any]) -> bool:
+    return str(turn.get("status") or "") in {"calling_model", "assembling_context", "streaming"}
+
+
+def _is_retryable_model_exception(exc: Exception) -> bool:
+    if type(exc).__name__ == "IncompleteResponseStreamError":
+        return True
+    message = _safe_error_message(exc).lower()
+    retryable_markers = (
+        "429",
+        "rate_limit",
+        "rate limit",
+        "timeout",
+        "timed out",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "remote end closed",
+        "ended before response.completed",
+        "incomplete stream",
+        "502",
+        "503",
+        "504",
+    )
+    return any(marker in message for marker in retryable_markers)
+
+
+def _trigger_domain_key(event: EventEnvelope) -> str | None:
+    if event.event_type == EventType.SNAPSHOT_READY and event.snapshot_id is not None:
+        return f"{event.event_type.value}:{event.snapshot_id}"
+    if event.event_type in {EventType.TOOL_CALL_COMPLETED, EventType.TOOL_CALL_FAILED, EventType.TOOL_CALL_DENIED}:
+        tool_call_id = event.payload.get("tool_call_id")
+        if tool_call_id:
+            return f"ToolCallTerminal:{tool_call_id}"
+    if event.event_type == EventType.AGENT_CONTINUE_REQUESTED:
+        reason = event.payload.get("reason")
+        if reason:
+            return f"{event.event_type.value}:{reason}"
+    return None

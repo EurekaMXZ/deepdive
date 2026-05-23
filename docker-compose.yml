@@ -1,0 +1,234 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: deepdive-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-deepdive}
+      POSTGRES_USER: ${POSTGRES_USER:-deepdive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deepdive}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/
+      - ./backend/db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:4.1.0
+    container_name: deepdive-kafka
+    environment:
+      CLUSTER_ID: "abcdefghijklmnopqrstuv"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:${KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: deepdive-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-deepdive}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-deepdive-secret}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: deepdive-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-deepdive}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-deepdive-secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-deepdive-objects}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set deepdive http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing deepdive/$${MINIO_BUCKET};
+      mc anonymous set none deepdive/$${MINIO_BUCKET};
+      "
+    restart: "no"
+
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+    container_name: deepdive-api
+    command: ["python", "-m", "backend.api.runtime"]
+    env_file:
+      - .env
+    environment:
+      API_HOST: 0.0.0.0
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepdive}:${POSTGRES_PASSWORD:-deepdive}@postgres:5432/${POSTGRES_DB:-deepdive}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MINIO_ENDPOINT: minio:9000
+      CACHE_ROOT_DIR: /cache/deepdive
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - app-cache:/cache/deepdive
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  outbox-worker:
+    profiles: ["app"]
+    build:
+      context: .
+    container_name: deepdive-outbox-worker
+    command: ["python", "-m", "backend.workers.outbox"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepdive}:${POSTGRES_PASSWORD:-deepdive}@postgres:5432/${POSTGRES_DB:-deepdive}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      OUTBOX_WORKER_RUN_FOREVER: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  analysis-worker:
+    profiles: ["app"]
+    build:
+      context: .
+    container_name: deepdive-analysis-worker
+    command: ["python", "-m", "backend.workers.analysis_runtime"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepdive}:${POSTGRES_PASSWORD:-deepdive}@postgres:5432/${POSTGRES_DB:-deepdive}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      ANALYSIS_WORKER_RUN_FOREVER: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  snapshot-worker:
+    profiles: ["app"]
+    build:
+      context: .
+    container_name: deepdive-snapshot-worker
+    command: ["python", "-m", "backend.workers.snapshot_runtime"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepdive}:${POSTGRES_PASSWORD:-deepdive}@postgres:5432/${POSTGRES_DB:-deepdive}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MINIO_ENDPOINT: minio:9000
+      CACHE_ROOT_DIR: /cache/deepdive
+      SNAPSHOT_WORKER_RUN_FOREVER: "true"
+    volumes:
+      - app-cache:/cache/deepdive
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  agent-worker:
+    profiles: ["app"]
+    build:
+      context: .
+    container_name: deepdive-agent-worker
+    command: ["python", "-m", "backend.workers.agent_runtime"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepdive}:${POSTGRES_PASSWORD:-deepdive}@postgres:5432/${POSTGRES_DB:-deepdive}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MINIO_ENDPOINT: minio:9000
+      AGENT_WORKER_RUN_FOREVER: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  execution-worker:
+    profiles: ["app"]
+    build:
+      context: .
+    container_name: deepdive-execution-worker
+    command: ["python", "-m", "backend.workers.execution_runtime"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepdive}:${POSTGRES_PASSWORD:-deepdive}@postgres:5432/${POSTGRES_DB:-deepdive}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MINIO_ENDPOINT: minio:9000
+      CACHE_ROOT_DIR: /cache/deepdive
+      EXECUTION_WORKER_RUN_FOREVER: "true"
+    volumes:
+      - app-cache:/cache/deepdive
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  kafka-data:
+  minio-data:
+  app-cache:

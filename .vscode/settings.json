@@ -1,0 +1,33 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv",
+  "python.languageServer": "Pylance",
+
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}",
+    "${workspaceFolder}/backend"
+  ],
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.indexing": true,
+
+  "editor.semanticHighlighting.enabled": true,
+
+  "python.terminal.activateEnvironment": true,
+
+  "files.exclude": {
+    "**/.venv": true,
+    "**/.cache": true,
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/.cache": true,
+    "**/frontend/node_modules": true
+  },
+  "files.watcherExclude": {
+    "**/.venv/**": true,
+    "**/.cache/**": true,
+    "**/frontend/node_modules/**": true
+  }
+}
