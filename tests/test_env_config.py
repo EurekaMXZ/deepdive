@@ -210,6 +210,137 @@ class EnvConfigTest(unittest.TestCase):
         self.assertEqual(config.openai.reasoning_summary, "detailed")
         self.assertFalse(config.openai.show_reasoning_summary)
 
+    def test_web_search_config_loads_without_serializing_tavily_api_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DEEPDIVE_ENV_FILE": str(Path(tempfile.gettempdir()) / "deepdive-missing.env"),
+                "TOOLS_ENABLED": "web_search,document_create,document_get,document_update,document_delete,document_finalize",
+                "TOOL_WEB_SEARCH_MAX_RESULTS": "8",
+                "TOOL_WEB_SEARCH_TIMEOUT_SECONDS": "12",
+                "TOOL_WEB_SEARCH_MAX_QUERY_CHARS": "400",
+                "OPENAI_WEB_SEARCH_ENABLED": "true",
+                "OPENAI_WEB_SEARCH_CONTEXT_SIZE": "high",
+                "OPENAI_WEB_SEARCH_EXTERNAL_WEB_ACCESS": "false",
+                "OPENAI_WEB_SEARCH_INCLUDE_SOURCES": "true",
+                "OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": "example.com,docs.example.com",
+                "OPENAI_WEB_SEARCH_RETURN_TOKEN_BUDGET": "default",
+                "TAVILY_API_KEY": "tvly-test-secret",
+            },
+            clear=True,
+        ):
+            config = load_app_config_from_env()
+
+        self.assertEqual(config.tools.enabled, ("web_search", "document_create", "document_get", "document_update", "document_delete", "document_finalize"))
+        self.assertEqual(config.tools.web_search.max_results, 8)
+        self.assertEqual(config.tools.web_search.timeout_seconds, 12)
+        self.assertEqual(config.tools.web_search.max_query_chars, 400)
+        self.assertTrue(config.tools.openai_web_search.enabled)
+        self.assertEqual(config.tools.openai_web_search.search_context_size, "high")
+        self.assertFalse(config.tools.openai_web_search.external_web_access)
+        self.assertTrue(config.tools.openai_web_search.include_sources)
+        self.assertEqual(config.tools.openai_web_search.allowed_domains, ("example.com", "docs.example.com"))
+        self.assertEqual(config.tools.openai_web_search.blocked_domains, ())
+        self.assertEqual(config.tools.openai_web_search.return_token_budget, "default")
+        self.assertNotIn("tvly-test-secret", str(config.to_json_dict()))
+
+    def test_app_config_from_json_restores_new_tool_configs(self) -> None:
+        config = app_config_from_json(
+            {
+                "tools": {
+                    "enabled": ["web_search", "document_create"],
+                    "web_search": {
+                        "max_results": 6,
+                        "timeout_seconds": 9,
+                        "max_query_chars": 350,
+                    },
+                    "openai_web_search": {
+                        "enabled": True,
+                        "search_context_size": "low",
+                        "external_web_access": False,
+                        "include_sources": True,
+                        "allowed_domains": ["example.com"],
+                        "return_token_budget": "unlimited",
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(config.tools.enabled, ("web_search", "document_create"))
+        self.assertEqual(config.tools.web_search.max_results, 6)
+        self.assertEqual(config.tools.web_search.timeout_seconds, 9)
+        self.assertEqual(config.tools.web_search.max_query_chars, 350)
+        self.assertTrue(config.tools.openai_web_search.enabled)
+        self.assertEqual(config.tools.openai_web_search.search_context_size, "low")
+        self.assertFalse(config.tools.openai_web_search.external_web_access)
+        self.assertTrue(config.tools.openai_web_search.include_sources)
+        self.assertEqual(config.tools.openai_web_search.allowed_domains, ("example.com",))
+        self.assertEqual(config.tools.openai_web_search.blocked_domains, ())
+        self.assertEqual(config.tools.openai_web_search.return_token_budget, "unlimited")
+
+    def test_openai_web_search_config_rejects_api_incompatible_values_from_env(self) -> None:
+        invalid_envs = [
+            {"OPENAI_WEB_SEARCH_CONTEXT_SIZE": "giant"},
+            {"OPENAI_WEB_SEARCH_RETURN_TOKEN_BUDGET": "42"},
+            {"OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": "https://example.com"},
+            {"OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": ",".join(f"example{i}.com" for i in range(101))},
+            {"OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": "example.com", "OPENAI_WEB_SEARCH_BLOCKED_DOMAINS": "blocked.example"},
+        ]
+
+        for env in invalid_envs:
+            with self.subTest(env=env):
+                values = {
+                    "DEEPDIVE_ENV_FILE": str(Path(tempfile.gettempdir()) / "deepdive-missing.env"),
+                    "OPENAI_WEB_SEARCH_ENABLED": "true",
+                    **env,
+                }
+                with patch.dict(os.environ, values, clear=True):
+                    with self.assertRaises(ValueError):
+                        load_app_config_from_env()
+
+    def test_openai_web_search_config_rejects_api_incompatible_values_from_json(self) -> None:
+        invalid_sections = [
+            {"enabled": True, "search_context_size": "giant"},
+            {"enabled": True, "return_token_budget": "42"},
+            {"enabled": True, "blocked_domains": ["http://blocked.example"]},
+            {"enabled": True, "allowed_domains": [f"example{i}.com" for i in range(101)]},
+            {"enabled": True, "allowed_domains": ["example.com"], "blocked_domains": ["blocked.example"]},
+        ]
+
+        for section in invalid_sections:
+            with self.subTest(section=section):
+                with self.assertRaises(ValueError):
+                    app_config_from_json({"tools": {"openai_web_search": section}})
+
+    def test_web_search_config_rejects_invalid_limits_from_env_and_json(self) -> None:
+        invalid_envs = [
+            {"TOOL_WEB_SEARCH_MAX_RESULTS": "0"},
+            {"TOOL_WEB_SEARCH_MAX_RESULTS": "11"},
+            {"TOOL_WEB_SEARCH_TIMEOUT_SECONDS": "0"},
+            {"TOOL_WEB_SEARCH_MAX_QUERY_CHARS": "0"},
+        ]
+
+        for env in invalid_envs:
+            with self.subTest(env=env):
+                values = {
+                    "DEEPDIVE_ENV_FILE": str(Path(tempfile.gettempdir()) / "deepdive-missing.env"),
+                    **env,
+                }
+                with patch.dict(os.environ, values, clear=True):
+                    with self.assertRaises(ValueError):
+                        load_app_config_from_env()
+
+        invalid_jsons = [
+            {"max_results": 0},
+            {"max_results": 11},
+            {"timeout_seconds": 0},
+            {"max_query_chars": 0},
+        ]
+        for section in invalid_jsons:
+            with self.subTest(section=section):
+                with self.assertRaises(ValueError):
+                    app_config_from_json({"tools": {"web_search": section}})
+
 
 if __name__ == "__main__":
     unittest.main()

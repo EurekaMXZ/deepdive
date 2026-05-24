@@ -7,6 +7,8 @@ from pathlib import Path
 from backend.cache import LocalSourceCache
 from backend.config import load_app_config_from_env, load_dotenv_if_exists
 from backend.db.runtime import create_database
+from backend.documents import DocumentService
+from backend.documents.repository import PostgresDocumentRepository
 from backend.events.kafka import AiokafkaEventConsumer, AiokafkaEventProducer
 from backend.events.runtime import run_consumer_forever, run_consumer_once
 from backend.execution import PermissionEngine, SourceToolExecutor
@@ -35,6 +37,14 @@ class ExecutionWorkerSettings:
     max_attempts: int = 3
     event_heartbeat_interval_seconds: float = 60.0
     tool_heartbeat_interval_seconds: float = 60.0
+    tavily_api_key: str = ""
+
+    def __repr__(self) -> str:
+        values = dict(self.__dict__)
+        if values.get("tavily_api_key"):
+            values["tavily_api_key"] = "***"
+        args = ", ".join(f"{key}={value!r}" for key, value in values.items())
+        return f"{type(self).__name__}({args})"
 
 
 def build_execution_command_topics() -> tuple[str, ...]:
@@ -63,6 +73,7 @@ def load_execution_worker_settings() -> ExecutionWorkerSettings:
             os.environ.get("EXECUTION_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"))
         ),
         tool_heartbeat_interval_seconds=float(os.environ.get("EXECUTION_TOOL_HEARTBEAT_INTERVAL_SECONDS", "60")),
+        tavily_api_key=os.environ.get("TAVILY_API_KEY", ""),
     )
 
 
@@ -82,20 +93,24 @@ async def consume_once(settings: ExecutionWorkerSettings) -> int:
         tool_calls = PostgresToolCallRepository(database)
         cache = LocalSourceCache(root_dir=Path(settings.cache_root_dir))
         cache.cleanup(app_config.cache)
+        storage = MinioObjectStorage(
+            endpoint=settings.minio_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            bucket=settings.minio_bucket,
+            secure=settings.minio_secure,
+        )
         executor = SourceToolExecutor(
             repository=snapshot_repository,
-            storage=MinioObjectStorage(
-                endpoint=settings.minio_endpoint,
-                access_key=settings.minio_access_key,
-                secret_key=settings.minio_secret_key,
-                bucket=settings.minio_bucket,
-                secure=settings.minio_secure,
-            ),
+            storage=storage,
             cache=cache,
             permission_engine=PermissionEngine(),
             read_config=app_config.tools.read_file,
             search_config=app_config.tools.search_text,
+            web_search_config=app_config.tools.web_search,
             cache_config=app_config.cache,
+            tavily_api_key=settings.tavily_api_key or os.environ.get("TAVILY_API_KEY", ""),
+            document_service=DocumentService(repository=PostgresDocumentRepository(database), storage=storage),
         )
         return await run_consumer_once(
             consumer=consumer,
@@ -134,20 +149,24 @@ async def consume_forever(settings: ExecutionWorkerSettings) -> int:
         tool_calls = PostgresToolCallRepository(database)
         cache = LocalSourceCache(root_dir=Path(settings.cache_root_dir))
         cache.cleanup(app_config.cache)
+        storage = MinioObjectStorage(
+            endpoint=settings.minio_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            bucket=settings.minio_bucket,
+            secure=settings.minio_secure,
+        )
         executor = SourceToolExecutor(
             repository=snapshot_repository,
-            storage=MinioObjectStorage(
-                endpoint=settings.minio_endpoint,
-                access_key=settings.minio_access_key,
-                secret_key=settings.minio_secret_key,
-                bucket=settings.minio_bucket,
-                secure=settings.minio_secure,
-            ),
+            storage=storage,
             cache=cache,
             permission_engine=PermissionEngine(),
             read_config=app_config.tools.read_file,
             search_config=app_config.tools.search_text,
+            web_search_config=app_config.tools.web_search,
             cache_config=app_config.cache,
+            tavily_api_key=settings.tavily_api_key or os.environ.get("TAVILY_API_KEY", ""),
+            document_service=DocumentService(repository=PostgresDocumentRepository(database), storage=storage),
         )
         return await run_consumer_forever(
             consumer=consumer,

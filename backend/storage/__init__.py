@@ -3,6 +3,7 @@ from __future__ import annotations
 from backend.storage.contracts import ObjectStorage
 from backend.storage.keys import (
     blob_key,
+    document_content_key,
     evidence_key,
     file_tree_key,
     git_bundle_key,
@@ -22,6 +23,7 @@ __all__ = [
     "MinioObjectStorage",
     "ObjectStorage",
     "blob_key",
+    "document_content_key",
     "evidence_key",
     "file_tree_key",
     "git_bundle_key",

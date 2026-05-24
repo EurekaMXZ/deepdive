@@ -5,6 +5,7 @@ import unittest
 from backend.agent import AgentSessionState
 from backend.agent.repository import PostgresAgentRepository
 from backend.events import EventEnvelope, EventType
+from backend.execution import DEFAULT_TOOL_REGISTRY_VERSION
 from backend.ids import new_uuid7
 
 
@@ -199,7 +200,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
             openai_call_id="call_1",
             tool_name="read_file",
             arguments_json={"path": "README.md"},
-            tool_registry_version="readonly-source-tools-v1",
+            tool_registry_version=DEFAULT_TOOL_REGISTRY_VERSION,
             tool_schema_hash="sha256:schema",
             tool_policy_hash="sha256:policy",
             status="queued",
@@ -225,7 +226,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
                 "openai_call_id": "call_1",
                 "tool_name": "read_file",
                 "arguments_json": {"path": "README.md"},
-                "tool_registry_version": "readonly-source-tools-v1",
+                "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
                 "tool_schema_hash": "sha256:schema",
                 "tool_policy_hash": "sha256:policy",
                 "status": "queued",
@@ -277,7 +278,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
                 "openai_call_id": "call_1",
                 "tool_name": "read_file",
                 "arguments_json": {"path": "README.md"},
-                "tool_registry_version": "readonly-source-tools-v1",
+                "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
                 "tool_schema_hash": "sha256:schema",
                 "tool_policy_hash": "sha256:policy",
                 "status": "queued",
@@ -393,7 +394,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
                     "openai_call_id": "call_1",
                     "tool_name": "read_file",
                     "arguments_json": {"path": "README.md"},
-                    "tool_registry_version": "readonly-source-tools-v1",
+                    "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
                     "tool_schema_hash": "sha256:schema",
                     "tool_policy_hash": "sha256:policy",
                     "status": "queued",

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass, field
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from backend.ids import new_uuid7
 DEFAULT_ENV_FILE_NAME = ".env"
 ENV_FILE_ENV_VAR = "DEEPDIVE_ENV_FILE"
 DEFAULT_CONFIG_VERSION = "repository-analysis-config-v1"
+TAVILY_WEB_SEARCH_MAX_RESULTS = 10
 
 
 @dataclass(frozen=True)
@@ -75,10 +77,30 @@ class SearchTextToolConfig:
 
 
 @dataclass(frozen=True)
+class WebSearchToolConfig:
+    max_results: int = 10
+    timeout_seconds: int = 20
+    max_query_chars: int = 500
+
+
+@dataclass(frozen=True)
+class OpenAIWebSearchToolConfig:
+    enabled: bool = False
+    search_context_size: str = "medium"
+    external_web_access: bool = True
+    include_sources: bool = False
+    allowed_domains: tuple[str, ...] = ()
+    blocked_domains: tuple[str, ...] = ()
+    return_token_budget: str | None = None
+
+
+@dataclass(frozen=True)
 class ToolsConfig:
     enabled: tuple[str, ...] = ("list_files", "search_file", "search_text", "read_file")
     read_file: ReadFileToolConfig = field(default_factory=ReadFileToolConfig)
     search_text: SearchTextToolConfig = field(default_factory=SearchTextToolConfig)
+    web_search: WebSearchToolConfig = field(default_factory=WebSearchToolConfig)
+    openai_web_search: OpenAIWebSearchToolConfig = field(default_factory=OpenAIWebSearchToolConfig)
 
 
 @dataclass(frozen=True)
@@ -156,6 +178,32 @@ def load_app_config_from_env() -> AppConfig:
             os.environ.get("ANALYSIS_GOAL_FILE", default_profile_config.goal_file)
         ),
     )
+    web_search = _validate_web_search_config(
+        WebSearchToolConfig(
+            max_results=_int_env("TOOL_WEB_SEARCH_MAX_RESULTS", default.tools.web_search.max_results),
+            timeout_seconds=_int_env("TOOL_WEB_SEARCH_TIMEOUT_SECONDS", default.tools.web_search.timeout_seconds),
+            max_query_chars=_int_env("TOOL_WEB_SEARCH_MAX_QUERY_CHARS", default.tools.web_search.max_query_chars),
+        )
+    )
+    openai_web_search = _validate_openai_web_search_config(
+        OpenAIWebSearchToolConfig(
+            enabled=_bool_env(os.environ.get("OPENAI_WEB_SEARCH_ENABLED", str(default.tools.openai_web_search.enabled))),
+            search_context_size=os.environ.get("OPENAI_WEB_SEARCH_CONTEXT_SIZE", default.tools.openai_web_search.search_context_size),
+            external_web_access=_bool_env(
+                os.environ.get(
+                    "OPENAI_WEB_SEARCH_EXTERNAL_WEB_ACCESS",
+                    str(default.tools.openai_web_search.external_web_access),
+                )
+            ),
+            include_sources=_bool_env(
+                os.environ.get("OPENAI_WEB_SEARCH_INCLUDE_SOURCES", str(default.tools.openai_web_search.include_sources))
+            ),
+            allowed_domains=_csv_env("OPENAI_WEB_SEARCH_ALLOWED_DOMAINS", default.tools.openai_web_search.allowed_domains),
+            blocked_domains=_csv_env("OPENAI_WEB_SEARCH_BLOCKED_DOMAINS", default.tools.openai_web_search.blocked_domains),
+            return_token_budget=_optional_env("OPENAI_WEB_SEARCH_RETURN_TOKEN_BUDGET"),
+        )
+    )
+
     return AppConfig(
         openai=OpenAIConfig(
             model=os.environ.get("OPENAI_MODEL", default.openai.model),
@@ -198,6 +246,8 @@ def load_app_config_from_env() -> AppConfig:
                 timeout_seconds=_int_env("TOOL_SEARCH_TEXT_TIMEOUT_SECONDS", default.tools.search_text.timeout_seconds),
                 max_output_bytes=_int_env("TOOL_SEARCH_TEXT_MAX_OUTPUT_BYTES", default.tools.search_text.max_output_bytes),
             ),
+            web_search=web_search,
+            openai_web_search=openai_web_search,
         ),
         snapshot=SnapshotConfig(
             max_file_bytes=_int_env("SNAPSHOT_MAX_FILE_BYTES", default.snapshot.max_file_bytes),
@@ -261,6 +311,13 @@ def _csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return items or default
 
 
+def _optional_env(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    return value.strip()
+
+
 def _read_optional_text_file(path_value: str) -> str | None:
     path = Path(path_value)
     if not path.is_absolute():
@@ -302,6 +359,38 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
 
     read_file_json = _nested_section(tools_json, "read_file")
     search_text_json = _nested_section(tools_json, "search_text")
+    web_search_json = _nested_section(tools_json, "web_search")
+    openai_web_search_json = _nested_section(tools_json, "openai_web_search")
+
+    web_search = _validate_web_search_config(
+        WebSearchToolConfig(
+            max_results=_int_value(web_search_json.get("max_results"), default.tools.web_search.max_results),
+            timeout_seconds=_int_value(web_search_json.get("timeout_seconds"), default.tools.web_search.timeout_seconds),
+            max_query_chars=_int_value(web_search_json.get("max_query_chars"), default.tools.web_search.max_query_chars),
+        )
+    )
+    openai_web_search = _validate_openai_web_search_config(
+        OpenAIWebSearchToolConfig(
+            enabled=_bool_value(openai_web_search_json.get("enabled"), default.tools.openai_web_search.enabled),
+            search_context_size=str(
+                openai_web_search_json.get("search_context_size") or default.tools.openai_web_search.search_context_size
+            ),
+            external_web_access=_bool_value(
+                openai_web_search_json.get("external_web_access"),
+                default.tools.openai_web_search.external_web_access,
+            ),
+            include_sources=_bool_value(openai_web_search_json.get("include_sources"), default.tools.openai_web_search.include_sources),
+            allowed_domains=_tuple_value(
+                openai_web_search_json.get("allowed_domains"),
+                default.tools.openai_web_search.allowed_domains,
+            ),
+            blocked_domains=_tuple_value(
+                openai_web_search_json.get("blocked_domains"),
+                default.tools.openai_web_search.blocked_domains,
+            ),
+            return_token_budget=_optional_str(openai_web_search_json.get("return_token_budget")),
+        )
+    )
 
     return AppConfig(
         openai=OpenAIConfig(
@@ -340,6 +429,8 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
                 timeout_seconds=_int_value(search_text_json.get("timeout_seconds"), default.tools.search_text.timeout_seconds),
                 max_output_bytes=_int_value(search_text_json.get("max_output_bytes"), default.tools.search_text.max_output_bytes),
             ),
+            web_search=web_search,
+            openai_web_search=openai_web_search,
         ),
         snapshot=SnapshotConfig(
             max_file_bytes=_int_value(snapshot_json.get("max_file_bytes"), default.snapshot.max_file_bytes),
@@ -395,7 +486,67 @@ def _tuple_value(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
 def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
+    if isinstance(value, str) and not value.strip():
+        return None
     return str(value)
+
+
+def _validate_web_search_config(config: WebSearchToolConfig) -> WebSearchToolConfig:
+    if config.max_results < 1:
+        raise ValueError("web_search.max_results must be at least 1")
+    if config.max_results > TAVILY_WEB_SEARCH_MAX_RESULTS:
+        raise ValueError(f"web_search.max_results must be at most {TAVILY_WEB_SEARCH_MAX_RESULTS}")
+    if config.timeout_seconds < 1:
+        raise ValueError("web_search.timeout_seconds must be at least 1")
+    if config.max_query_chars < 1:
+        raise ValueError("web_search.max_query_chars must be at least 1")
+    return config
+
+
+def _validate_openai_web_search_config(config: OpenAIWebSearchToolConfig) -> OpenAIWebSearchToolConfig:
+    if config.search_context_size not in {"low", "medium", "high"}:
+        raise ValueError("openai_web_search.search_context_size must be one of low, medium, high")
+    if config.return_token_budget not in {None, "default", "unlimited"}:
+        raise ValueError("openai_web_search.return_token_budget must be default or unlimited")
+    allowed_domains = _validate_openai_web_search_domains("allowed_domains", config.allowed_domains)
+    blocked_domains = _validate_openai_web_search_domains("blocked_domains", config.blocked_domains)
+    if allowed_domains and blocked_domains:
+        raise ValueError("openai_web_search filters may set allowed_domains or blocked_domains, not both")
+    return OpenAIWebSearchToolConfig(
+        enabled=config.enabled,
+        search_context_size=config.search_context_size,
+        external_web_access=config.external_web_access,
+        include_sources=config.include_sources,
+        allowed_domains=allowed_domains,
+        blocked_domains=blocked_domains,
+        return_token_budget=config.return_token_budget,
+    )
+
+
+def _validate_openai_web_search_domains(name: str, domains: tuple[str, ...]) -> tuple[str, ...]:
+    if len(domains) > 100:
+        raise ValueError(f"openai_web_search.{name} must contain at most 100 domains")
+    normalized = tuple(domain.strip().lower() for domain in domains if domain.strip())
+    for domain in normalized:
+        if not _is_openai_web_search_domain(domain):
+            raise ValueError(f"openai_web_search.{name} contains invalid domain: {domain}")
+    return normalized
+
+
+def _is_openai_web_search_domain(domain: str) -> bool:
+    if not domain or "://" in domain or "/" in domain or domain.endswith("."):
+        return False
+    if domain in {"localhost", "local"} or domain.endswith(".local"):
+        return False
+    try:
+        ip_address(domain)
+        return False
+    except ValueError:
+        pass
+    labels = domain.split(".")
+    if len(labels) < 2:
+        return False
+    return all(label and label.replace("-", "").isalnum() and not label.startswith("-") and not label.endswith("-") for label in labels)
 
 
 def create_config_snapshot(config: AppConfig, config_version: str = DEFAULT_CONFIG_VERSION) -> ConfigSnapshot:

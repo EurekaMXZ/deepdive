@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -83,6 +84,7 @@ class LocalPipelineTest(unittest.IsolatedAsyncioTestCase):
             patch("backend.workers.local_pipeline.SourceToolExecutor", FakeExecutor),
             patch("backend.workers.local_pipeline.ExecutionCommandHandler", FakeHandler),
             patch("backend.workers.local_pipeline.load_app_config_from_env", return_value=config),
+            patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-local-secret"}),
         ):
             await _dispatch_event(
                 FakeConnection(),
@@ -111,6 +113,7 @@ class LocalPipelineTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(captured_executor_kwargs[0]["read_config"], config.tools.read_file)
         self.assertIs(captured_executor_kwargs[0]["search_config"], config.tools.search_text)
         self.assertIs(captured_executor_kwargs[0]["cache_config"], config.cache)
+        self.assertEqual(captured_executor_kwargs[0]["tavily_api_key"], "tvly-local-secret")
 
 
 class FakeConnection:

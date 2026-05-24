@@ -25,6 +25,8 @@ class DatabaseSchemaTest(unittest.TestCase):
             "snapshots",
             "snapshot_files",
             "agent_instruction_files",
+            "documents",
+            "document_revisions",
         }
 
         self.assertTrue(required_tables.issubset(metadata.tables.keys()))
@@ -61,6 +63,7 @@ class DatabaseSchemaTest(unittest.TestCase):
         tool_calls = metadata.tables["tool_calls"]
         snapshots = metadata.tables["snapshots"]
         snapshot_files = metadata.tables["snapshot_files"]
+        document_revisions = metadata.tables["document_revisions"]
 
         self.assertIn(
             ("event_id", "consumer_name"),
@@ -108,6 +111,48 @@ class DatabaseSchemaTest(unittest.TestCase):
             ("repository_url_hash", "resolved_commit_sha", "snapshot_policy_hash"),
             {_columns(index) for index in snapshots.indexes if index.unique},
         )
+        self.assertIn(
+            ("document_id", "version"),
+            {_columns(index) for index in document_revisions.indexes if index.unique},
+        )
+        self.assertIn(
+            ("tool_call_id",),
+            {_columns(index) for index in document_revisions.indexes if index.unique},
+        )
+
+    def test_document_tables_have_expected_columns(self) -> None:
+        documents = metadata.tables["documents"]
+        revisions = metadata.tables["document_revisions"]
+
+        for column_name in [
+            "analysis_id",
+            "agent_id",
+            "title",
+            "kind",
+            "status",
+            "current_version",
+            "content_ref",
+            "content_hash",
+            "size_bytes",
+            "created_at",
+            "updated_at",
+            "finalized_at",
+        ]:
+            with self.subTest(table="documents", column=column_name):
+                self.assertIn(column_name, documents.c)
+
+        for column_name in [
+            "document_id",
+            "version",
+            "tool_call_id",
+            "operation",
+            "content_ref",
+            "content_hash",
+            "size_bytes",
+            "created_at",
+        ]:
+            with self.subTest(table="document_revisions", column=column_name):
+                self.assertIn(column_name, revisions.c)
 
     def test_agent_session_uses_limits_not_budget_naming(self) -> None:
         columns = metadata.tables["agent_sessions"].c

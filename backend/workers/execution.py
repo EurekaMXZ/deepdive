@@ -58,6 +58,7 @@ class ExecutionCommandHandler:
             result = await self._executor.execute(
                 ToolExecutionContext(
                     tool_call_id=tool_call_id,
+                    analysis_id=event.analysis_id,
                     agent_id=row["agent_id"],
                     snapshot_id=row["snapshot_id"],
                 ),

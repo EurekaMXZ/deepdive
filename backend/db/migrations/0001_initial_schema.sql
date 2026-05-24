@@ -149,6 +149,34 @@ CREATE TABLE evidence (
     created_at timestamptz not null
 );
 
+CREATE TABLE documents (
+    id uuid primary key default uuidv7(),
+    analysis_id uuid not null references analyses(id),
+    agent_id uuid not null references agent_sessions(id),
+    title text not null,
+    kind text not null,
+    status text not null,
+    current_version integer not null,
+    content_ref text not null,
+    content_hash text not null,
+    size_bytes bigint not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null,
+    finalized_at timestamptz
+);
+
+CREATE TABLE document_revisions (
+    id uuid primary key default uuidv7(),
+    document_id uuid not null references documents(id),
+    version integer not null,
+    tool_call_id uuid not null references tool_calls(id),
+    operation text not null,
+    content_ref text not null,
+    content_hash text not null,
+    size_bytes bigint not null,
+    created_at timestamptz not null
+);
+
 CREATE TABLE memory_summaries (
     id uuid primary key default uuidv7(),
     agent_id uuid not null references agent_sessions(id),
@@ -252,6 +280,15 @@ CREATE UNIQUE INDEX uq_tool_calls_agent_openai_call
 
 CREATE INDEX ix_evidence_agent_path
     ON evidence (agent_id, path);
+
+CREATE INDEX ix_documents_analysis_status
+    ON documents (analysis_id, status);
+
+CREATE UNIQUE INDEX uq_document_revisions_document_version
+    ON document_revisions (document_id, version);
+
+CREATE UNIQUE INDEX uq_document_revisions_tool_call
+    ON document_revisions (tool_call_id);
 
 CREATE INDEX ix_outbox_events_published_created_at
     ON outbox_events (published_at, created_at);

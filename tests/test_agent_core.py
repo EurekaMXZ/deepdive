@@ -326,6 +326,122 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("config:prompts/custom-system.md", [ref["ref"] for ref in refs])
         self.assertIn("profile:profiles/custom.md", [ref["ref"] for ref in refs])
 
+    async def test_default_context_instructions_describe_artifact_and_web_tools(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            config_snapshot_json={
+                "tools": {
+                    "enabled": [
+                        "read_file",
+                        "web_search",
+                        "document_create",
+                        "document_update",
+                        "document_finalize",
+                    ]
+                }
+            },
+        )
+
+        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+        )
+
+        self.assertIn("source snapshot tools", context["instructions"])
+        self.assertIn("web search tools", context["instructions"])
+        self.assertIn("document artifact tools", context["instructions"])
+        self.assertNotIn("Use only the provided read-only tools", context["instructions"])
+
+    async def test_openai_web_search_config_adds_hosted_tool_and_sources_include(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            config_snapshot_json={
+                "tools": {
+                    "enabled": ["read_file"],
+                    "openai_web_search": {
+                        "enabled": True,
+                        "search_context_size": "medium",
+                        "external_web_access": True,
+                        "include_sources": True,
+                        "allowed_domains": ["example.com"],
+                        "return_token_budget": "default",
+                    },
+                }
+            },
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_1",
+                output_text="分析完成",
+                tool_calls=[],
+                usage={"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        hosted_tools = [tool for tool in runner.requests[0]["tools"] if tool["type"] == "web_search"]
+        self.assertEqual(
+            hosted_tools,
+            [
+                {
+                    "type": "web_search",
+                    "search_context_size": "medium",
+                    "external_web_access": True,
+                    "filters": {
+                        "allowed_domains": ["example.com"],
+                    },
+                    "return_token_budget": "default",
+                }
+            ],
+        )
+        self.assertEqual(runner.requests[0]["include"], ["web_search_call.action.sources"])
+
     async def test_agent_turn_output_is_stored_and_referenced(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
@@ -722,6 +838,133 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(persisted_summary_events[0]["response_id"], "resp_1")
+
+    async def test_reasoning_summary_delta_done_is_aggregated_into_final_summary(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        turn_id = new_uuid7()
+        live_publisher = FakeLiveModelStreamPublisher()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={
+                    "reasoning_effort": "medium",
+                    "reasoning_summary": "auto",
+                    "show_reasoning_summary": True,
+                    "parallel_tool_calls": False,
+                },
+            ),
+            turn_id=turn_id,
+            tool_call_id=new_uuid7(),
+        )
+        runner = StreamingRawSseEventsRunner(
+            [
+                {
+                    "event_name": "model_reasoning_summary.delta",
+                    "payload": {
+                        "type": "model_reasoning_summary.delta",
+                        "text": "我将读取",
+                        "item_id": "rs_1",
+                        "response_id": "resp_1",
+                    },
+                },
+                {
+                    "event_name": "model_reasoning_summary.delta",
+                    "payload": {
+                        "type": "model_reasoning_summary.delta",
+                        "text": "仓库结构。",
+                        "item_id": "rs_1",
+                        "response_id": "resp_1",
+                    },
+                },
+                {
+                    "event_name": "model_reasoning_summary.done",
+                    "payload": {
+                        "type": "model_reasoning_summary.done",
+                        "text": "我将读取仓库结构。",
+                        "item_id": "rs_1",
+                        "response_id": "resp_1",
+                    },
+                },
+                {
+                    "event_name": "response.completed",
+                    "payload": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_1",
+                            "output": [],
+                            "usage": {"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+                        },
+                    },
+                },
+            ],
+            ModelResponse(
+                response_id="resp_1",
+                output_text="分析完成",
+                tool_calls=[],
+                usage={"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+            ),
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+            live_stream_publisher=live_publisher,
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        self.assertEqual(
+            [event["event_name"] for event in live_publisher.events],
+            [
+                "model_reasoning_summary.delta",
+                "model_reasoning_summary.delta",
+                "model_reasoning_summary",
+                "model_reasoning_summary.done",
+                "response.completed",
+            ],
+        )
+        self.assertEqual(
+            live_publisher.events[2]["payload"],
+            {
+                "type": "model_reasoning_summary",
+                "text": "我将读取仓库结构。",
+                "item_id": "rs_1",
+                "response_id": "resp_1",
+            },
+        )
+        persisted_summary_events = [
+            event for event in repository.stream_events if event["event_type"].startswith("model_reasoning_summary")
+        ]
+        self.assertEqual([event["event_type"] for event in persisted_summary_events], ["model_reasoning_summary"])
+        self.assertEqual(
+            persisted_summary_events[0]["payload"],
+            {
+                "type": "model_reasoning_summary",
+                "text": "我将读取仓库结构。",
+                "item_id": "rs_1",
+                "response_id": "resp_1",
+            },
+        )
 
     async def test_reasoning_summary_live_event_respects_session_display_flag(self) -> None:
         analysis_id = new_uuid7()
@@ -1498,13 +1741,13 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 latest_response_id=None,
                 turn_count=3,
                 max_turns=10,
-                effective_limits_json={"auto_compact_threshold_tokens": 200},
+                effective_limits_json={"auto_compact_threshold_tokens": 350},
                 effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
             ),
             turn_id=new_uuid7(),
             tool_call_id=new_uuid7(),
             context_item_batches=[
-                [{"role": "user", "content": [{"type": "input_text", "text": "PRE_COMPACT_CONTEXT " + ("x" * 200)}]}],
+                [{"role": "user", "content": [{"type": "input_text", "text": "PRE_COMPACT_CONTEXT " + ("x" * 800)}]}],
                 [{"role": "user", "content": [{"type": "input_text", "text": "POST_COMPACT_MEMORY"}]}],
             ],
         )
@@ -1553,14 +1796,14 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 latest_response_id=None,
                 turn_count=3,
                 max_turns=10,
-                effective_limits_json={"auto_compact_threshold_tokens": 200},
+                effective_limits_json={"auto_compact_threshold_tokens": 350},
                 effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
             ),
             turn_id=new_uuid7(),
             tool_call_id=new_uuid7(),
             context_item_batches=[
-                [{"role": "user", "content": [{"type": "input_text", "text": "PRE_COMPACT_CONTEXT " + ("x" * 200)}]}],
-                [{"role": "user", "content": [{"type": "input_text", "text": "POST_COMPACT_CONTEXT " + ("y" * 200)}]}],
+                [{"role": "user", "content": [{"type": "input_text", "text": "PRE_COMPACT_CONTEXT " + ("x" * 800)}]}],
+                [{"role": "user", "content": [{"type": "input_text", "text": "POST_COMPACT_CONTEXT " + ("y" * 800)}]}],
             ],
         )
         runner = FakeResponsesRunner(
@@ -1606,7 +1849,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 latest_response_id="resp_before_compact",
                 turn_count=3,
                 max_turns=10,
-                effective_limits_json={"auto_compact_threshold_tokens": 200},
+                effective_limits_json={"auto_compact_threshold_tokens": 350},
                 effective_runtime_json={
                     "reasoning_effort": "medium",
                     "parallel_tool_calls": False,
@@ -1616,7 +1859,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             turn_id=new_uuid7(),
             tool_call_id=new_uuid7(),
             context_item_batches=[
-                [{"role": "user", "content": [{"type": "input_text", "text": "PRE_COMPACT_CONTEXT " + ("x" * 200)}]}],
+                [{"role": "user", "content": [{"type": "input_text", "text": "PRE_COMPACT_CONTEXT " + ("x" * 800)}]}],
                 [{"role": "user", "content": [{"type": "input_text", "text": "POST_COMPACT_MEMORY"}]}],
             ],
         )
@@ -1997,6 +2240,145 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(repository.stream_events[-1]["payload"]["ok"])
         self.assertEqual(repository.stream_events[-1]["payload"]["result_ref"], "tool-results/existing.json")
         self.assertEqual(repository.outbox_events[-1].event_type, EventType.TOOL_CALL_COMPLETED)
+
+    async def test_repeated_web_search_tool_call_does_not_reuse_previous_result(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            config_snapshot_json={"tools": {"enabled": ["web_search"]}},
+            completed_tool_call={
+                "id": new_uuid7(),
+                "openai_call_id": "call_old",
+                "tool_name": "web_search",
+                "arguments_json": {"query": "current release notes", "max_results": 3},
+                "result_summary": {"ok": True, "result": {"results": [{"title": "stale"}]}},
+                "result_ref": "tool-results/stale.json",
+            },
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_1",
+                output_text="",
+                tool_calls=[
+                    ModelToolCall(
+                        call_id="call_new",
+                        name="web_search",
+                        arguments={"query": "current release notes", "max_results": 3},
+                    )
+                ],
+                usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        self.assertEqual(repository.tool_calls[0]["status"], "queued")
+        self.assertEqual(repository.tool_calls[0]["openai_call_id"], "call_new")
+        self.assertEqual(repository.outbox_events[-1].event_type, EventType.TOOL_CALL_REQUESTED)
+
+    async def test_repeated_document_write_tool_call_does_not_reuse_previous_result(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        document_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            config_snapshot_json={"tools": {"enabled": ["document_update"]}},
+            completed_tool_call={
+                "id": new_uuid7(),
+                "openai_call_id": "call_old",
+                "tool_name": "document_update",
+                "arguments_json": {
+                    "document_id": str(document_id),
+                    "expected_version": 1,
+                    "content": "same content",
+                },
+                "result_summary": {"ok": True, "result": {"document_id": str(document_id), "version": 2}},
+                "result_ref": "tool-results/document-update.json",
+            },
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_1",
+                output_text="",
+                tool_calls=[
+                    ModelToolCall(
+                        call_id="call_new",
+                        name="document_update",
+                        arguments={
+                            "document_id": str(document_id),
+                            "expected_version": 1,
+                            "content": "same content",
+                        },
+                    )
+                ],
+                usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        self.assertEqual(repository.tool_calls[0]["status"], "queued")
+        self.assertEqual(repository.tool_calls[0]["openai_call_id"], "call_new")
+        self.assertEqual(repository.outbox_events[-1].event_type, EventType.TOOL_CALL_REQUESTED)
 
     async def test_cancelled_session_ignores_late_snapshot_ready_without_model_call(self) -> None:
         analysis_id = new_uuid7()

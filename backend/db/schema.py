@@ -177,6 +177,43 @@ evidence = Table(
 Index("ix_evidence_agent_path", evidence.c.agent_id, evidence.c.path)
 
 
+documents = Table(
+    "documents",
+    metadata,
+    uuid_pk(),
+    Column("analysis_id", UUID(as_uuid=True), ForeignKey("analyses.id"), nullable=False),
+    Column("agent_id", UUID(as_uuid=True), ForeignKey("agent_sessions.id"), nullable=False),
+    Column("title", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("current_version", Integer, nullable=False),
+    Column("content_ref", Text, nullable=False),
+    Column("content_hash", Text, nullable=False),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("finalized_at", DateTime(timezone=True)),
+)
+Index("ix_documents_analysis_status", documents.c.analysis_id, documents.c.status)
+
+
+document_revisions = Table(
+    "document_revisions",
+    metadata,
+    uuid_pk(),
+    Column("document_id", UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("tool_call_id", UUID(as_uuid=True), ForeignKey("tool_calls.id"), nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("content_ref", Text, nullable=False),
+    Column("content_hash", Text, nullable=False),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_document_revisions_document_version", document_revisions.c.document_id, document_revisions.c.version, unique=True)
+Index("uq_document_revisions_tool_call", document_revisions.c.tool_call_id, unique=True)
+
+
 memory_summaries = Table(
     "memory_summaries",
     metadata,

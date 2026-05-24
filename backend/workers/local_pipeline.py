@@ -10,6 +10,8 @@ from backend.agent.openai_runner import OpenAIResponsesRunner
 from backend.agent.repository import PostgresAgentRepository
 from backend.config import load_app_config_from_env, load_dotenv_if_exists
 from backend.db.runtime import create_database
+from backend.documents import DocumentService
+from backend.documents.repository import PostgresDocumentRepository
 from backend.events import EventEnvelope, EventType
 from backend.execution import PermissionEngine, SourceToolExecutor
 from backend.execution.repository import PostgresSnapshotToolRepository, PostgresToolCallRepository
@@ -147,7 +149,10 @@ async def _dispatch_event(connection, event: EventEnvelope, *, storage: MinioObj
                 permission_engine=PermissionEngine(),
                 read_config=app_config.tools.read_file,
                 search_config=app_config.tools.search_text,
+                web_search_config=app_config.tools.web_search,
                 cache_config=app_config.cache,
+                tavily_api_key=os.environ.get("TAVILY_API_KEY", ""),
+                document_service=DocumentService(repository=PostgresDocumentRepository(connection), storage=storage),
             ),
         )(event)
         return

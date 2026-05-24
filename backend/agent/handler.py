@@ -141,12 +141,54 @@ class AgentCommandHandler:
                 self._config.openai.show_reasoning_summary,
             )
         )
+        reasoning_summary_fragments: list[str] = []
+        reasoning_summary_final_emitted = False
 
         async def on_raw_sse_event(event_name: str, payload: dict[str, Any]) -> None:
-            nonlocal live_stream_seq
+            nonlocal live_stream_seq, reasoning_summary_final_emitted
             live_payload = completed_live_payload(payload) if event_name == "response.completed" else dict(payload)
             response_id = live_payload.get("response_id") or payload.get("response_id")
-            if event_name == "response.completed" and show_reasoning_summary:
+            if event_name == "model_reasoning_summary.delta":
+                text = live_payload.get("text")
+                if isinstance(text, str) and text:
+                    reasoning_summary_fragments.append(text)
+            if event_name == "model_reasoning_summary.done" and show_reasoning_summary and not reasoning_summary_final_emitted:
+                text = live_payload.get("text")
+                final_text = text if isinstance(text, str) and text else "".join(reasoning_summary_fragments)
+                if final_text:
+                    summary_payload: dict[str, Any] = {
+                        "type": "model_reasoning_summary",
+                        "text": final_text,
+                    }
+                    for key in ("item_id", "response_id", "summary_index"):
+                        if live_payload.get(key) is not None:
+                            summary_payload[key] = live_payload[key]
+                    summary_response_id = summary_payload.get("response_id") or response_id
+                    await self._persist_model_reasoning_summary(
+                        event_name="model_reasoning_summary",
+                        payload=summary_payload,
+                        session=session,
+                        turn_id=turn_id,
+                        attempt=event.attempt,
+                        response_id=summary_response_id,
+                    )
+                    reasoning_summary_final_emitted = True
+                    if self._live_stream_publisher is not None:
+                        live_stream_seq += 1
+                        try:
+                            await self._live_stream_publisher.publish_event(
+                                analysis_id=session.analysis_id,
+                                agent_id=session.agent_id,
+                                turn_id=turn_id,
+                                attempt=event.attempt,
+                                stream_seq=live_stream_seq,
+                                event_name="model_reasoning_summary",
+                                payload=summary_payload,
+                                response_id=summary_response_id,
+                            )
+                        except Exception:
+                            return
+            if event_name == "response.completed" and show_reasoning_summary and not reasoning_summary_final_emitted:
                 for summary_payload in model_reasoning_summary_live_payloads(payload):
                     await self._persist_model_reasoning_summary(
                         event_name="model_reasoning_summary",
@@ -171,6 +213,7 @@ class AgentCommandHandler:
                             )
                         except Exception:
                             return
+                    reasoning_summary_final_emitted = True
             if event_name.startswith("model_reasoning_summary") and not show_reasoning_summary:
                 return
             if self._live_stream_publisher is None:
@@ -216,6 +259,8 @@ class AgentCommandHandler:
             "service_tier": session.effective_runtime_json.get("service_tier", self._config.openai.service_tier),
             "on_raw_sse_event": on_raw_sse_event,
         }
+        if context.get("include"):
+            request["include"] = context["include"]
         if (
             not compacted
             and use_previous_response_id
@@ -533,11 +578,13 @@ class AgentCommandHandler:
     ) -> None:
         if session.snapshot_id is None:
             raise ValueError("Tool call requires snapshot_id")
-        previous_result = await self._repository.find_completed_tool_call(
-            agent_id=session.agent_id,
-            tool_name=tool_call.name,
-            arguments_json=tool_call.arguments,
-        )
+        previous_result = None
+        if _can_reuse_completed_tool_result(tool_call.name):
+            previous_result = await self._repository.find_completed_tool_call(
+                agent_id=session.agent_id,
+                tool_name=tool_call.name,
+                arguments_json=tool_call.arguments,
+            )
         if previous_result is not None:
             duplicate_result = _previous_tool_result_payload(tool_call=tool_call, previous_result=previous_result)
             event_envelope = EventEnvelope.new(
@@ -919,6 +966,10 @@ def _previous_tool_result_payload(*, tool_call: ModelToolCall, previous_result: 
     if previous_result.get("result_ref") and "result_ref" not in payload:
         payload["result_ref"] = previous_result["result_ref"]
     return payload
+
+
+def _can_reuse_completed_tool_result(tool_name: str) -> bool:
+    return tool_name in {"list_files", "search_file", "search_text", "read_file"}
 
 
 def _is_retryable_model_turn(turn: dict[str, Any]) -> bool:

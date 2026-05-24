@@ -106,6 +106,23 @@ class DatabaseMigrationTest(unittest.TestCase):
             r"create\s+unique\s+index\s+uq_snapshots_repo_commit_policy\s+on\s+snapshots"
             r"\s+\(repository_url_hash,\s*resolved_commit_sha,\s*snapshot_policy_hash\)",
         )
+        documents_body = _create_table_body(sql, "documents")
+        document_revisions_body = _create_table_body(sql, "document_revisions")
+        self.assertRegex(documents_body, r"\banalysis_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(documents_body, r"\bagent_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(documents_body, r"\bstatus\s+text\s+not\s+null\b")
+        self.assertRegex(documents_body, r"\bcurrent_version\s+integer\s+not\s+null\b")
+        self.assertRegex(document_revisions_body, r"\btool_call_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_document_revisions_document_version\s+on\s+document_revisions"
+            r"\s+\(document_id,\s*version\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_document_revisions_tool_call\s+on\s+document_revisions"
+            r"\s+\(tool_call_id\)",
+        )
 
     def test_migration_defines_query_path_indexes(self) -> None:
         sql = _migration_sql()

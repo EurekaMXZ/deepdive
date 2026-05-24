@@ -6,6 +6,7 @@ import unittest
 from backend.api.services import PostgresAnalysisService
 from backend.config import AppConfig, OpenAIConfig
 from backend.events import EventEnvelope, EventType
+from backend.execution import DEFAULT_TOOL_REGISTRY_VERSION
 from backend.ids import new_uuid7
 
 
@@ -55,7 +56,7 @@ class PostgresAnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         agent_session_params = database.connection.executed[2][1]
         self.assertEqual(config_snapshot_params["config_version"], "repository-analysis-config-v1")
         self.assertEqual(agent_session_params["effective_prompt_version"], "repository-analysis-config-v1")
-        self.assertEqual(agent_session_params["effective_tool_registry_version"], "readonly-source-tools-v1")
+        self.assertEqual(agent_session_params["effective_tool_registry_version"], DEFAULT_TOOL_REGISTRY_VERSION)
 
     async def test_create_persists_reasoning_summary_runtime_settings(self) -> None:
         database = FakeDatabase()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import os
 import subprocess
 from datetime import UTC, datetime
 import tempfile
@@ -10,12 +11,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.cache import LocalSourceCache
-from backend.config import CacheConfig, ReadFileToolConfig, SearchTextToolConfig
+from backend.config import AppConfig, CacheConfig, ReadFileToolConfig, SearchTextToolConfig, ToolsConfig, WebSearchToolConfig
 from backend.execution import (
+    DEFAULT_TOOL_POLICY_HASH,
+    DEFAULT_TOOL_REGISTRY_VERSION,
     PermissionDecision,
     PermissionEngine,
     SnapshotToolRepository,
     SourceToolExecutor,
+    ToolCapability,
     ToolExecutionContext,
     ToolRegistry,
 )
@@ -27,6 +31,11 @@ from backend.storage import InMemoryObjectStorage
 
 
 class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
+    def test_registry_version_and_policy_hash_have_stable_audit_shapes(self) -> None:
+        self.assertIsInstance(DEFAULT_TOOL_REGISTRY_VERSION, str)
+        self.assertTrue(DEFAULT_TOOL_REGISTRY_VERSION)
+        self.assertRegex(DEFAULT_TOOL_POLICY_HASH, r"^sha256:[0-9a-f]{64}$")
+
     def test_tool_registry_schema_exposes_filters_cursors_and_nullable_read_defaults(self) -> None:
         tools = {tool["name"]: tool["parameters"] for tool in ToolRegistry.default().response_tools()}
 
@@ -39,6 +48,309 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tools["read_file"]["properties"]["start_line"]["type"], ["integer", "null"])
         self.assertEqual(tools["read_file"]["properties"]["end_line"]["type"], ["integer", "null"])
         self.assertEqual(tools["read_file"]["properties"]["max_bytes"]["type"], ["integer", "null"])
+
+    def test_tool_registry_schema_exposes_web_search_and_document_tools(self) -> None:
+        registry = ToolRegistry.from_config(
+            ToolsConfig(
+                enabled=(
+                    "web_search",
+                    "document_create",
+                    "document_get",
+                    "document_update",
+                    "document_delete",
+                    "document_finalize",
+                )
+            )
+        )
+        tools = {tool["name"]: tool for tool in registry.response_tools()}
+
+        self.assertEqual(
+            set(tools),
+            {
+                "web_search",
+                "document_create",
+                "document_get",
+                "document_update",
+                "document_delete",
+                "document_finalize",
+            },
+        )
+        self.assertEqual(tools["web_search"]["parameters"]["properties"]["search_depth"]["enum"], ["basic", "advanced"])
+        self.assertEqual(tools["web_search"]["parameters"]["properties"]["topic"]["enum"], ["general", "news", "finance"])
+        self.assertEqual(tools["web_search"]["parameters"]["properties"]["max_results"]["maximum"], 10)
+        self.assertIn("expected_version", tools["document_update"]["parameters"]["required"])
+        self.assertTrue(tools["document_create"]["description"].startswith("Create"))
+
+    def test_tool_registry_rejects_unknown_enabled_tools(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown enabled tools: missing_tool"):
+            ToolRegistry.from_config(ToolsConfig(enabled=("list_files", "missing_tool")))
+
+    def test_tool_registry_definitions_include_policy_metadata(self) -> None:
+        registry = ToolRegistry.from_config(
+            ToolsConfig(enabled=("list_files", "web_search", "document_create", "document_get"))
+        )
+        definitions = {tool.name: tool for tool in registry.tools}
+
+        self.assertEqual(definitions["list_files"].capability, ToolCapability.SOURCE_READ)
+        self.assertTrue(definitions["list_files"].read_only)
+        self.assertTrue(definitions["list_files"].idempotent)
+        self.assertEqual(definitions["web_search"].capability, ToolCapability.EXTERNAL_NETWORK)
+        self.assertTrue(definitions["web_search"].read_only)
+        self.assertFalse(definitions["web_search"].idempotent)
+        self.assertEqual(definitions["document_create"].capability, ToolCapability.ARTIFACT_WRITE)
+        self.assertFalse(definitions["document_create"].read_only)
+        self.assertFalse(definitions["document_create"].idempotent)
+        self.assertTrue(definitions["document_create"].requires_analysis_id)
+        self.assertEqual(definitions["document_get"].capability, ToolCapability.ARTIFACT_READ)
+        self.assertTrue(definitions["document_get"].requires_analysis_id)
+
+    def test_permission_result_includes_tool_policy_metadata(self) -> None:
+        result = PermissionEngine().evaluate_result(
+            tool_name="document_create",
+            arguments={"title": "Draft", "kind": "markdown", "content": "# Draft"},
+            tools_config=ToolsConfig(enabled=("document_create",)),
+        )
+
+        self.assertEqual(result.decision, PermissionDecision.ALLOW)
+        self.assertEqual(result.capability, ToolCapability.ARTIFACT_WRITE)
+        self.assertFalse(result.read_only)
+        self.assertFalse(result.idempotent)
+        self.assertTrue(result.requires_analysis_id)
+
+    def test_source_tool_executor_registers_explicit_handlers_for_all_function_tools(self) -> None:
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+        )
+        registry = ToolRegistry.from_config(
+            ToolsConfig(
+                enabled=(
+                    "list_files",
+                    "search_file",
+                    "search_text",
+                    "read_file",
+                    "web_search",
+                    "document_create",
+                    "document_get",
+                    "document_update",
+                    "document_delete",
+                    "document_finalize",
+                )
+            )
+        )
+
+        self.assertEqual(set(executor.tool_handlers), {tool.name for tool in registry.tools})
+        self.assertIs(executor.tool_handlers["document_create"], executor.tool_handlers["document_update"])
+        self.assertIs(executor.tool_handlers["document_delete"], executor.tool_handlers["document_finalize"])
+
+    async def test_web_search_returns_not_configured_without_api_key(self) -> None:
+        with patch.dict(os.environ, {"TAVILY_API_KEY": ""}):
+            executor = SourceToolExecutor(
+                repository=FakeToolRepository(files=[]),
+                storage=InMemoryObjectStorage(),
+                cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+                permission_engine=PermissionEngine(),
+            )
+
+            result = await executor.execute(
+                ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+                "web_search",
+                {"query": "deepdive", "max_results": 3},
+                config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "WEB_SEARCH_NOT_CONFIGURED")
+
+    async def test_web_search_rejects_unsafe_domains(self) -> None:
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+            tavily_api_key="tvly-test-key",
+        )
+
+        for domain in ["localhost", "127.0.0.1", "http://example.com"]:
+            with self.subTest(domain=domain):
+                result = await executor.execute(
+                    ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+                    "web_search",
+                    {"query": "deepdive", "include_domains": [domain]},
+                    config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error"]["code"], "INVALID_ARGUMENTS")
+
+    async def test_web_search_rejects_invalid_time_range_before_calling_tavily(self) -> None:
+        client = FakeTavilyClient({"results": []})
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+            tavily_api_key="tvly-test-key",
+            tavily_client=client,
+        )
+
+        result = await executor.execute(
+            ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+            "web_search",
+            {"query": "deepdive", "time_range": "decade"},
+            config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "INVALID_ARGUMENTS")
+        self.assertEqual(client.requests, [])
+
+    async def test_web_search_enforces_configured_max_results(self) -> None:
+        client = FakeTavilyClient({"results": []})
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+            web_search_config=WebSearchToolConfig(max_results=3),
+            tavily_api_key="tvly-test-key",
+            tavily_client=client,
+        )
+
+        result = await executor.execute(
+            ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+            "web_search",
+            {"query": "deepdive", "max_results": 10},
+            config=AppConfig(tools=ToolsConfig(enabled=("web_search",), web_search=WebSearchToolConfig(max_results=3))),
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(client.requests[0]["max_results"], 3)
+
+    async def test_web_search_uses_config_snapshot_not_executor_startup_config(self) -> None:
+        client = FakeTavilyClient({"results": []})
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+            web_search_config=WebSearchToolConfig(max_results=10),
+            tavily_api_key="tvly-test-key",
+            tavily_client=client,
+        )
+
+        result = await executor.execute(
+            ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+            "web_search",
+            {"query": "deepdive", "max_results": 10},
+            config=AppConfig(tools=ToolsConfig(enabled=("web_search",), web_search=WebSearchToolConfig(max_results=3))),
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(client.requests[0]["max_results"], 3)
+
+    async def test_web_search_rejects_invalid_dates_and_domain_overflow_before_calling_tavily(self) -> None:
+        client = FakeTavilyClient({"results": []})
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+            tavily_api_key="tvly-test-key",
+            tavily_client=client,
+        )
+
+        cases = [
+            {"query": "deepdive", "start_date": "2026/05/01"},
+            {"query": "deepdive", "start_date": "2026-05-02", "end_date": "2026-05-01"},
+            {"query": "deepdive", "include_domains": [f"example{i}.com" for i in range(21)]},
+        ]
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                result = await executor.execute(
+                    ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+                    "web_search",
+                    arguments,
+                    config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error"]["code"], "INVALID_ARGUMENTS")
+        self.assertEqual(client.requests, [])
+
+    async def test_web_search_success_normalizes_results_and_writes_result_ref(self) -> None:
+        snapshot_id = new_uuid7()
+        tool_call_id = new_uuid7()
+        storage = InMemoryObjectStorage()
+        client = FakeTavilyClient(
+            {
+                "results": [
+                    {
+                        "title": "DeepDive",
+                        "url": "https://example.com/deepdive",
+                        "content": "A repository analysis system.",
+                        "score": 0.91,
+                        "published_date": "2026-05-01",
+                        "domain": "example.com",
+                        "raw_content": "raw content must not be returned by default",
+                    }
+                ],
+                "query": "deepdive",
+                "response_time": 1.2,
+            }
+        )
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=storage,
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+            tavily_api_key="tvly-test-key",
+            tavily_client=client,
+        )
+
+        result = await executor.execute(
+            ToolExecutionContext(tool_call_id=tool_call_id, analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=snapshot_id),
+            "web_search",
+            {
+                "query": "deepdive",
+                "search_depth": "advanced",
+                "max_results": 20,
+                "topic": "general",
+                "include_domains": ["example.com"],
+            },
+            config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tool_name"], "web_search")
+        self.assertEqual(
+            result["scope"],
+            {"type": "external_web", "snapshot_id": str(snapshot_id), "provider": "tavily"},
+        )
+        self.assertEqual(result["result_ref"], f"tool-results/{tool_call_id}.json")
+        self.assertIn(result["result_ref"], storage.objects)
+        self.assertEqual(client.requests[0]["max_results"], 10)
+        self.assertFalse(client.requests[0]["include_raw_content"])
+        self.assertFalse(client.requests[0]["include_answer"])
+        self.assertFalse(client.requests[0]["include_images"])
+        self.assertEqual(
+            result["result"]["results"],
+            [
+                {
+                    "title": "DeepDive",
+                    "url": "https://example.com/deepdive",
+                    "content": "A repository analysis system.",
+                    "score": 0.91,
+                    "published_date": "2026-05-01",
+                    "domain": "example.com",
+                }
+            ],
+        )
+        stored_payload = storage.objects[result["result_ref"]].decode("utf-8")
+        self.assertNotIn("tvly-test-key", stored_payload)
+        self.assertNotIn("raw_content", stored_payload)
 
     async def test_read_file_returns_bounded_line_range_and_evidence(self) -> None:
         snapshot_id = new_uuid7()
@@ -1613,6 +1925,84 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("not enabled", repository.failed[0]["result"]["error"]["message"])
         self.assertEqual(repository.outbox_events[0].event_type, EventType.TOOL_CALL_DENIED)
 
+    async def test_execution_handler_uses_web_search_limits_from_config_snapshot(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        tool_call_id = new_uuid7()
+        client = FakeTavilyClient({"results": []})
+        repository = FakeToolCallRepository(
+            queued_tool_call={
+                "id": tool_call_id,
+                "agent_id": agent_id,
+                "snapshot_id": snapshot_id,
+                "openai_call_id": "call_1",
+                "tool_name": "web_search",
+                "arguments_json": {"query": "deepdive", "max_results": 10},
+                "status": "queued",
+                "config_json": {
+                    "tools": {
+                        "enabled": ["web_search"],
+                        "web_search": {"max_results": 3, "timeout_seconds": 9, "max_query_chars": 400},
+                    }
+                },
+            }
+        )
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+            web_search_config=WebSearchToolConfig(max_results=10),
+            tavily_api_key="tvly-test-key",
+            tavily_client=client,
+        )
+
+        await ExecutionCommandHandler(tool_calls=repository, executor=executor)(
+            EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_REQUESTED,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={"tool_call_id": str(tool_call_id)},
+            )
+        )
+
+        self.assertEqual(client.requests[0]["max_results"], 3)
+        self.assertEqual(repository.completed[0]["result"]["ok"], True)
+
+    async def test_execution_handler_passes_analysis_id_to_executor_context(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        tool_call_id = new_uuid7()
+        repository = FakeToolCallRepository(
+            queued_tool_call={
+                "id": tool_call_id,
+                "agent_id": agent_id,
+                "snapshot_id": snapshot_id,
+                "openai_call_id": "call_1",
+                "tool_name": "document_create",
+                "arguments_json": {"title": "Notes", "content": "draft"},
+                "status": "queued",
+            }
+        )
+        executor = ContextCapturingExecutor({"ok": True, "tool_name": "document_create", "result": {"document_id": "doc_1"}})
+
+        await ExecutionCommandHandler(tool_calls=repository, executor=executor)(
+            EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_REQUESTED,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={"tool_call_id": str(tool_call_id)},
+            )
+        )
+
+        self.assertEqual(executor.contexts[0].analysis_id, analysis_id)
+        self.assertEqual(executor.contexts[0].agent_id, agent_id)
+        self.assertEqual(executor.contexts[0].snapshot_id, snapshot_id)
+
 
 class PostgresToolCallRepositoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_claim_queued_tool_call_can_take_over_expired_running_claim(self) -> None:
@@ -2211,6 +2601,28 @@ class StaticExecutor:
     async def execute(self, context, tool_name: str, arguments: dict, **kwargs):
         del context, tool_name, arguments, kwargs
         return self.result
+
+
+class ContextCapturingExecutor:
+    def __init__(self, result: dict) -> None:
+        self.result = result
+        self.contexts = []
+
+    async def execute(self, context, tool_name: str, arguments: dict, **kwargs):
+        del tool_name, arguments, kwargs
+        self.contexts.append(context)
+        return self.result
+
+
+class FakeTavilyClient:
+    def __init__(self, response: dict) -> None:
+        self.response = response
+        self.requests: list[dict] = []
+
+    def search(self, request: dict, *, api_key: str, timeout_seconds: int) -> dict:
+        del api_key, timeout_seconds
+        self.requests.append(request)
+        return self.response
 
 
 class RaisingExecutor:

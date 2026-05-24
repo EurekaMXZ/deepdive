@@ -29,6 +29,7 @@ class ExecutionWorkerRuntimeTest(unittest.TestCase):
                 "MINIO_BUCKET": "deepdive-objects-custom",
                 "MINIO_SECURE": "false",
                 "CACHE_ROOT_DIR": "D:/cache/deepdive",
+                "TAVILY_API_KEY": "tvly-test-secret",
                 "EXECUTION_TOOL_HEARTBEAT_INTERVAL_SECONDS": "11",
             },
             clear=True,
@@ -48,10 +49,12 @@ class ExecutionWorkerRuntimeTest(unittest.TestCase):
                 minio_bucket="deepdive-objects-custom",
                 minio_secure=False,
                 cache_root_dir="D:/cache/deepdive",
+                tavily_api_key="tvly-test-secret",
                 run_forever=True,
                 tool_heartbeat_interval_seconds=11,
             ),
         )
+        self.assertNotIn("tvly-test-secret", repr(settings))
 
     def test_execution_worker_defaults_to_run_forever_for_runtime_service(self) -> None:
         with patch.dict(
@@ -172,6 +175,7 @@ class ExecutionWorkerRuntimeTest(unittest.TestCase):
                         "TOOL_SEARCH_TEXT_MAX_OUTPUT_BYTES": "222",
                         "CACHE_ROOT_DIR": "D:/cache/deepdive",
                         "CACHE_MAX_PREFIX_BYTES": "333",
+                        "TAVILY_API_KEY": "tvly-test-secret",
                     },
                     clear=True,
                 ),
@@ -203,6 +207,7 @@ class ExecutionWorkerRuntimeTest(unittest.TestCase):
         self.assertEqual(captured_executor_kwargs[0]["search_config"].max_output_bytes, 222)
         self.assertEqual(captured_executor_kwargs[0]["cache_config"].root_dir, "D:/cache/deepdive")
         self.assertEqual(captured_executor_kwargs[0]["cache_config"].max_prefix_bytes, 333)
+        self.assertEqual(captured_executor_kwargs[0]["tavily_api_key"], "tvly-test-secret")
         self.assertEqual(captured_handler_kwargs[0]["heartbeat_interval_seconds"], 23)
 
 

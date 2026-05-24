@@ -92,6 +92,55 @@ class OpenAIRunnerTest(unittest.TestCase):
         self.assertEqual(response.output_items[0]["phase"], "analysis")
         self.assertEqual(response.output_items[1]["id"], "fc_1")
 
+    def test_parse_response_payload_preserves_web_search_call_and_url_citations_without_tool_call(self) -> None:
+        output_items = [
+            {
+                "id": "ws_1",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": {
+                    "type": "search",
+                    "query": "latest DeepDive news",
+                    "sources": [{"url": "https://example.com/deepdive", "title": "DeepDive"}],
+                },
+            },
+            {
+                "id": "msg_1",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "DeepDive update",
+                        "annotations": [
+                            {
+                                "type": "url_citation",
+                                "start_index": 0,
+                                "end_index": 8,
+                                "url": "https://example.com/deepdive",
+                                "title": "DeepDive",
+                            }
+                        ],
+                    }
+                ],
+            },
+        ]
+
+        response = parse_response_payload(
+            {
+                "id": "resp_1",
+                "output": output_items,
+                "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+            }
+        )
+
+        self.assertEqual(response.output_text, "DeepDive update")
+        self.assertEqual(response.tool_calls, [])
+        self.assertEqual(response.output_items, output_items)
+        self.assertEqual(response.output_items[0]["action"]["sources"][0]["url"], "https://example.com/deepdive")
+        self.assertEqual(response.output_items[1]["content"][0]["annotations"][0]["type"], "url_citation")
+
     def test_parse_stream_event_extracts_delta_function_call_and_completion(self) -> None:
         delta = parse_stream_event(
             "response.output_text.delta",

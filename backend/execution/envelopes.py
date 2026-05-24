@@ -11,11 +11,14 @@ def tool_success_envelope(
     evidence_ids: list[str],
     truncated: bool,
     next_cursor: Any,
+    *,
+    scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "ok": True,
         "tool_name": tool_name,
         "snapshot_id": str(snapshot_id),
+        "scope": scope or {"type": "source_snapshot", "snapshot_id": str(snapshot_id)},
         "result": result,
         "evidence_ids": evidence_ids,
         "truncated": truncated,
