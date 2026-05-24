@@ -1467,7 +1467,7 @@ Git URL 或日志泄露 credential
 
 ## 24. MVP 范围
 
-当前阶段不实现独立的最终文档或报告输出。调试阶段以前端通过 `GET /analysis/{analysis_id}/events` 读取到的 Agent 输出流为准；后端只保存 stream event、最后一轮输出摘要、状态、工具结果和证据引用。后续如果需要 Markdown、PDF、DOCX 或其他报告产物，应单独设计 report/export worker，消费 `AnalysisCompleted` 后生成。
+当前阶段已将 Markdown document artifact 纳入 Agent 输出路径。Agent 可以通过 `document_create`、`document_update`、`document_get`、`document_finalize` 和 `document_delete` 创建、迭代、读取、定稿或删除分析文档；这些 artifact 归属于 analysis，并通过 document revision、content_ref 和 tool_call_id 保持可审计、可重放。`GET /analysis/{analysis_id}/events` 仍用于调试和实时观察 Agent 状态、工具调用、证据引用与最终输出摘要，但最终分析材料应优先沉淀为平台 document artifact，而不是只依赖 SSE 文本流。PDF、DOCX 等导出版式仍不属于 MVP；如后续需要，应单独设计 report/export worker，消费 finalized document artifact 或 `AnalysisCompleted` 后生成。
 
 当前阶段不实现 token 或成本预算系统。后端只保留 Responses API usage、上下文 token 估算、compact 触发阈值和自动 compact 能力；不做预算分配、预算告警、成本上限控制，也不基于预算调度任务。
 
@@ -1485,7 +1485,8 @@ MVP 包含：
 10. ripgrep prefix cache 和 read_file single file cache。
 11. AGENTS.md 扫描、作用域解析和上下文注入。
 12. SSE replay，基于 Postgres `agent_stream_events` 恢复输出流。
-13. 基础日志、指标、错误状态和 DLQ。
+13. Markdown document artifact 工具链：`document_create`、`document_get`、`document_update`、`document_delete`、`document_finalize`。
+14. 基础日志、指标、错误状态和 DLQ。
 
 MVP 明确不包含：
 
@@ -1500,7 +1501,7 @@ shell execution tools
 真实 LFS object 下载
 多 Agent 并发执行
 自动 PR / patch 生成
-最终文档/报告输出
+PDF/DOCX 等导出版式输出
 token 或成本预算系统
 ```
 

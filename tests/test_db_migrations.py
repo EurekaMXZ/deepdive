@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 from backend.db.schema import metadata
-
 
 MIGRATION_PATH = Path("backend/db/migrations/0001_initial_schema.sql")
 
@@ -65,7 +64,9 @@ class DatabaseMigrationTest(unittest.TestCase):
             sql,
             r"constraint\s+uq_event_processing_claims_event_consumer\s+unique\s+\(event_id,\s*consumer_name\)",
         )
-        self.assertRegex(_create_table_body(sql, "event_processing_claims"), r"\bclaim_expires_at\s+timestamptz\s+not\s+null\b")
+        self.assertRegex(
+            _create_table_body(sql, "event_processing_claims"), r"\bclaim_expires_at\s+timestamptz\s+not\s+null\b"
+        )
         self.assertRegex(_create_table_body(sql, "event_processing_claims"), r"\bclaim_owner\s+text\s+not\s+null\b")
         self.assertRegex(
             sql,

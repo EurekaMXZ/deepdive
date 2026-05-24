@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import bindparam, text
@@ -24,14 +24,14 @@ from backend.agent.context_items import (
 )
 from backend.agent.repository_context import AgentContextStore
 from backend.agent.repository_stream import AgentStreamStore, add_stream_event_on_connection
-from backend.db.connections import connection_from
+from backend.db.connections import AsyncDbConnection, ConnectionSource, connection_from
 from backend.events import EventEnvelope
 from backend.events.repositories import DbOutboxSink
 from backend.ids import new_uuid7
 
 
 class PostgresAgentRepository:
-    def __init__(self, connection_or_database) -> None:
+    def __init__(self, connection_or_database: ConnectionSource) -> None:
         self._connection_or_database = connection_or_database
         self._context_store = AgentContextStore(connection_or_database)
         self._stream_store = AgentStreamStore(connection_or_database)
@@ -260,7 +260,7 @@ class PostgresAgentRepository:
 
     async def _append_context_item_on_connection(
         self,
-        connection,
+        connection: AsyncDbConnection,
         *,
         agent_id: UUID,
         turn_id: UUID | None,
@@ -283,7 +283,7 @@ class PostgresAgentRepository:
 
     async def _add_stream_event_on_connection(
         self,
-        connection,
+        connection: AsyncDbConnection,
         *,
         analysis_id: UUID,
         agent_id: UUID,
@@ -320,7 +320,7 @@ class PostgresAgentRepository:
                 {"agent_id": agent_id, "status": status, "updated_at": datetime.now(UTC)},
             )
 
-    async def save_context_assembly(self, **kwargs) -> None:
+    async def save_context_assembly(self, **kwargs: Any) -> None:
         async with self._connection() as connection:
             await connection.execute(
                 text(
@@ -342,12 +342,13 @@ class PostgresAgentRepository:
                 },
             )
 
-    async def complete_turn(self, **kwargs) -> None:
+    async def complete_turn(self, **kwargs: Any) -> None:
         async with self._connection() as connection:
             await self._complete_turn_on_connection(connection, **kwargs)
 
-    async def _complete_turn_on_connection(self, connection, **kwargs) -> None:
-        usage = kwargs.get("usage") or {}
+    async def _complete_turn_on_connection(self, connection: AsyncDbConnection, **kwargs: Any) -> None:
+        raw_usage = kwargs.get("usage")
+        usage = cast(dict[str, Any], raw_usage) if isinstance(raw_usage, dict) else {}
         await connection.execute(
             text(
                 """
@@ -400,7 +401,9 @@ class PostgresAgentRepository:
         async with self._connection() as connection:
             await self._update_latest_response_on_connection(connection, agent_id=agent_id, response_id=response_id)
 
-    async def _update_latest_response_on_connection(self, connection, *, agent_id: UUID, response_id: str) -> None:
+    async def _update_latest_response_on_connection(
+        self, connection: AsyncDbConnection, *, agent_id: UUID, response_id: str
+    ) -> None:
         await connection.execute(
             text(
                 """
@@ -414,7 +417,7 @@ class PostgresAgentRepository:
             {"agent_id": agent_id, "response_id": response_id, "updated_at": datetime.now(UTC)},
         )
 
-    async def create_tool_call(self, **kwargs) -> UUID:
+    async def create_tool_call(self, **kwargs: Any) -> UUID:
         async with self._connection() as connection:
             return await self._create_tool_call_on_connection(connection, **kwargs)
 
@@ -470,7 +473,9 @@ class PostgresAgentRepository:
             if not can_create:
                 raise RuntimeError("Cannot request tool call for terminal or cancelling analysis")
             context_tool_call_kwargs = dict(tool_call_kwargs)
-            await self._update_latest_response_on_connection(connection, agent_id=latest_response_agent_id, response_id=response_id)
+            await self._update_latest_response_on_connection(
+                connection, agent_id=latest_response_agent_id, response_id=response_id
+            )
             await self._complete_turn_on_connection(
                 connection,
                 turn_id=turn_id,
@@ -495,7 +500,10 @@ class PostgresAgentRepository:
                 source=MODEL_CONTEXT_SOURCE,
                 idempotency_key=model_function_call_idempotency_key(context_tool_call_kwargs["openai_call_id"]),
             )
-            if context_tool_call_kwargs.get("status") == "completed" and context_tool_call_kwargs.get("result_summary") is not None:
+            if (
+                context_tool_call_kwargs.get("status") == "completed"
+                and context_tool_call_kwargs.get("result_summary") is not None
+            ):
                 await self._append_context_item_on_connection(
                     connection,
                     agent_id=agent_id,
@@ -548,7 +556,9 @@ class PostgresAgentRepository:
             can_complete = await self._lock_continuable_session(connection, analysis_id=analysis_id, agent_id=agent_id)
             if not can_complete:
                 return False
-            await self._update_latest_response_on_connection(connection, agent_id=latest_response_agent_id, response_id=response_id)
+            await self._update_latest_response_on_connection(
+                connection, agent_id=latest_response_agent_id, response_id=response_id
+            )
             await self._complete_turn_on_connection(
                 connection,
                 turn_id=turn_id,
@@ -618,10 +628,12 @@ class PostgresAgentRepository:
         del final_output_payload
         return True
 
-    async def _can_continue(self, connection, *, analysis_id: UUID, agent_id: UUID) -> bool:
+    async def _can_continue(self, connection: AsyncDbConnection, *, analysis_id: UUID, agent_id: UUID) -> bool:
         return await self._lock_continuable_session(connection, analysis_id=analysis_id, agent_id=agent_id)
 
-    async def _lock_continuable_session(self, connection, *, analysis_id: UUID, agent_id: UUID) -> bool:
+    async def _lock_continuable_session(
+        self, connection: AsyncDbConnection, *, analysis_id: UUID, agent_id: UUID
+    ) -> bool:
         result = await connection.execute(
             text(
                 """
@@ -639,7 +651,7 @@ class PostgresAgentRepository:
         )
         return result.mappings().first() is not None
 
-    async def _create_tool_call_on_connection(self, connection, **kwargs) -> UUID:
+    async def _create_tool_call_on_connection(self, connection: AsyncDbConnection, **kwargs: Any) -> UUID:
         tool_call_id = new_uuid7()
         result = await connection.execute(
             text(
@@ -671,7 +683,9 @@ class PostgresAgentRepository:
         row = result.mappings().first()
         return row["id"] if row is not None else tool_call_id
 
-    async def find_completed_tool_call(self, *, agent_id: UUID, tool_name: str, arguments_json: dict[str, Any]) -> dict[str, Any] | None:
+    async def find_completed_tool_call(
+        self, *, agent_id: UUID, tool_name: str, arguments_json: dict[str, Any]
+    ) -> dict[str, Any] | None:
         async with self._connection() as connection:
             result = await connection.execute(
                 text(
@@ -771,7 +785,12 @@ class PostgresAgentRepository:
                       AND status NOT IN ('completed', 'failed', 'cancelled', 'cancelling')
                     """
                 ),
-                {"analysis_id": analysis_id, "now": now, "error_code": error_code, "error_message": error_message[:4096]},
+                {
+                    "analysis_id": analysis_id,
+                    "now": now,
+                    "error_code": error_code,
+                    "error_message": error_message[:4096],
+                },
             )
             await connection.execute(
                 text(
@@ -786,7 +805,7 @@ class PostgresAgentRepository:
             )
         return int(getattr(result, "rowcount", 0) or 0) > 0
 
-    async def add_memory_summary(self, **kwargs) -> None:
+    async def add_memory_summary(self, **kwargs: Any) -> None:
         async with self._connection() as connection:
             await connection.execute(
                 text(
@@ -870,10 +889,12 @@ class PostgresAgentRepository:
         async with self._connection() as connection:
             await DbOutboxSink(connection).add(event)
 
+
 def _json_or_none(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
         return value
     import json
+
     return json.dumps(value, ensure_ascii=False)

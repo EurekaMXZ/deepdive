@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+from backend.config import AppConfig
 from backend.events import EventEnvelope, EventType
 from backend.ids import new_uuid7
-from backend.config import AppConfig
 from backend.snapshot import (
     SnapshotBuildError,
     SnapshotBuildResult,
@@ -12,7 +12,6 @@ from backend.snapshot import (
     SnapshotInstructionRecord,
 )
 from backend.workers.snapshot import SnapshotCommandHandler
-
 
 _DEFAULT_CONFIG_SNAPSHOT = object()
 
@@ -85,7 +84,9 @@ class SnapshotWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(builder.requests[0].requested_ref, "main")
 
         outbox_events = _outbox_events(connection)
-        self.assertEqual([event.event_type for event in outbox_events], [EventType.SNAPSHOT_STARTED, EventType.SNAPSHOT_READY])
+        self.assertEqual(
+            [event.event_type for event in outbox_events], [EventType.SNAPSHOT_STARTED, EventType.SNAPSHOT_READY]
+        )
         self.assertEqual(outbox_events[-1].snapshot_id, snapshot_id)
         self.assertEqual(outbox_events[-1].payload["resolved_commit_sha"], "b" * 40)
 
@@ -147,7 +148,9 @@ class SnapshotWorkerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(builder.requests, [])
         outbox_events = _outbox_events(connection)
-        self.assertEqual([event.event_type for event in outbox_events], [EventType.SNAPSHOT_STARTED, EventType.SNAPSHOT_FAILED])
+        self.assertEqual(
+            [event.event_type for event in outbox_events], [EventType.SNAPSHOT_STARTED, EventType.SNAPSHOT_FAILED]
+        )
         self.assertEqual(outbox_events[-1].payload["error_code"], "CONFIG_SNAPSHOT_REQUIRED")
         stream_events = _stream_events(connection)
         self.assertEqual(stream_events[-1]["payload_json"]["error_code"], "CONFIG_SNAPSHOT_REQUIRED")
@@ -176,7 +179,9 @@ class SnapshotWorkerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(builder.requests, [])
         outbox_events = _outbox_events(connection)
-        self.assertEqual([event.event_type for event in outbox_events], [EventType.SNAPSHOT_STARTED, EventType.SNAPSHOT_FAILED])
+        self.assertEqual(
+            [event.event_type for event in outbox_events], [EventType.SNAPSHOT_STARTED, EventType.SNAPSHOT_FAILED]
+        )
         self.assertEqual(outbox_events[-1].payload["error_code"], "CONFIG_SNAPSHOT_NOT_FOUND")
         stream_events = _stream_events(connection)
         self.assertEqual(stream_events[-1]["payload_json"]["error_code"], "CONFIG_SNAPSHOT_NOT_FOUND")
@@ -335,18 +340,18 @@ class SnapshotWorkerTest(unittest.IsolatedAsyncioTestCase):
 
 
 class FakeDatabase:
-    def __init__(self, connection: "FakeConnection") -> None:
+    def __init__(self, connection: FakeConnection) -> None:
         self.connection = connection
 
-    def begin(self) -> "FakeTransaction":
+    def begin(self) -> FakeTransaction:
         return FakeTransaction(self.connection)
 
 
 class FakeTransaction:
-    def __init__(self, connection: "FakeConnection") -> None:
+    def __init__(self, connection: FakeConnection) -> None:
         self.connection = connection
 
-    async def __aenter__(self) -> "FakeConnection":
+    async def __aenter__(self) -> FakeConnection:
         return self.connection
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
@@ -367,7 +372,11 @@ class FakeConnection:
         self.associate_snapshot_rows = associate_snapshot_rows
         self.mark_snapshotting_rows = mark_snapshotting_rows
         self.mark_failed_rows = mark_failed_rows
-        self.config_snapshot_json = AppConfig.default().to_json_dict() if config_snapshot_json is _DEFAULT_CONFIG_SNAPSHOT else config_snapshot_json
+        self.config_snapshot_json = (
+            AppConfig.default().to_json_dict()
+            if config_snapshot_json is _DEFAULT_CONFIG_SNAPSHOT
+            else config_snapshot_json
+        )
         self.executed = []
         self.scalar_calls = []
 
@@ -375,15 +384,29 @@ class FakeConnection:
         self.executed.append((statement, params or {}))
         statement_text = str(statement)
         if "FROM config_snapshots" in statement_text:
-            return FakeResult([{"config_json": self.config_snapshot_json}] if self.config_snapshot_json is not None else [])
+            return FakeResult(
+                [{"config_json": self.config_snapshot_json}] if self.config_snapshot_json is not None else []
+            )
         if "SELECT id, manifest_key" in statement_text:
             return FakeResult([self.existing_snapshot] if self.existing_snapshot else [])
-        if "UPDATE agent_sessions" in statement_text and "snapshot_id = :snapshot_id" in statement_text and "RETURNING id" in statement_text:
-            return FakeResult(self.associate_snapshot_rows if self.associate_snapshot_rows is not None else [{"id": params.get("agent_id")}])
+        if (
+            "UPDATE agent_sessions" in statement_text
+            and "snapshot_id = :snapshot_id" in statement_text
+            and "RETURNING id" in statement_text
+        ):
+            return FakeResult(
+                self.associate_snapshot_rows
+                if self.associate_snapshot_rows is not None
+                else [{"id": params.get("agent_id")}]
+            )
         if "RETURNING tenant_id" in statement_text or "RETURNING a.tenant_id" in statement_text:
-            return FakeResult(self.mark_snapshotting_rows if self.mark_snapshotting_rows is not None else [{"tenant_id": None}])
+            return FakeResult(
+                self.mark_snapshotting_rows if self.mark_snapshotting_rows is not None else [{"tenant_id": None}]
+            )
         if "UPDATE analyses" in statement_text and "error_code = :error_code" in statement_text:
-            return FakeResult(self.mark_failed_rows if self.mark_failed_rows is not None else [{"id": params.get("analysis_id")}])
+            return FakeResult(
+                self.mark_failed_rows if self.mark_failed_rows is not None else [{"id": params.get("analysis_id")}]
+            )
         return FakeResult([])
 
     async def scalar(self, statement, params=None):
@@ -397,7 +420,7 @@ class FakeResult:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def first(self) -> dict | None:
@@ -462,11 +485,7 @@ def _outbox_events(connection: FakeConnection) -> list[EventEnvelope]:
 
 
 def _stream_events(connection: FakeConnection) -> list[dict]:
-    return [
-        params
-        for statement, params in connection.executed
-        if "INSERT INTO agent_stream_events" in str(statement)
-    ]
+    return [params for statement, params in connection.executed if "INSERT INTO agent_stream_events" in str(statement)]
 
 
 if __name__ == "__main__":

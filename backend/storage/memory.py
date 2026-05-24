@@ -6,8 +6,8 @@ from pathlib import Path
 
 @dataclass
 class InMemoryObjectStorage:
-    objects: dict[str, bytes] = field(default_factory=dict)
-    content_types: dict[str, str] = field(default_factory=dict)
+    objects: dict[str, bytes] = field(default_factory=dict[str, bytes])
+    content_types: dict[str, str] = field(default_factory=dict[str, str])
 
     def put_bytes(self, key: str, data: bytes, *, content_type: str = "application/octet-stream") -> None:
         self.objects[key] = data

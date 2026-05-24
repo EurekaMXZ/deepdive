@@ -12,8 +12,7 @@ from backend.ids import new_uuid7
 
 
 class OutboxSink(Protocol):
-    def add(self, event: EventEnvelope) -> None:
-        ...
+    def add(self, event: EventEnvelope) -> None: ...
 
 
 class NullOutboxSink:
@@ -22,6 +21,8 @@ class NullOutboxSink:
 
 
 class InMemoryAnalysisService:
+    supports_live_events = False
+
     def __init__(self, *, outbox: OutboxSink | None = None) -> None:
         self._records: dict[UUID, AnalysisRecord] = {}
         self._outbox = outbox or NullOutboxSink()
@@ -118,3 +119,7 @@ class InMemoryAnalysisService:
                 payload_json={"status": record.status},
             )
         ][after_seq:]
+
+    def analysis_status(self, analysis_id: UUID) -> str | None:
+        record = self._records.get(analysis_id)
+        return record.status if record is not None else None

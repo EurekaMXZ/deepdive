@@ -38,7 +38,9 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(rows=[{"config_json": {"tools": {"enabled": ["read_file"]}}}])
         repository = PostgresAgentRepository(connection)
 
-        config_json = await repository.load_config_snapshot(session=_session(snapshot_id=new_uuid7(), config_snapshot_id=config_snapshot_id))
+        config_json = await repository.load_config_snapshot(
+            session=_session(snapshot_id=new_uuid7(), config_snapshot_id=config_snapshot_id)
+        )
 
         self.assertEqual(config_json["tools"]["enabled"], ["read_file"])
         executed_sql = "\n".join(str(statement) for statement, _ in connection.executed)
@@ -215,7 +217,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         assistant_output = assistant_output_payload("done")
 
         self.assertEqual(function_call["type"], "function_call")
-        self.assertEqual(function_call["arguments"], "{\"path\":\"README.md\"}")
+        self.assertEqual(function_call["arguments"], '{"path":"README.md"}')
         self.assertEqual(function_output["type"], "function_call_output")
         self.assertIn("README.md", function_output["output"])
         self.assertEqual(assistant_output["type"], "message")
@@ -303,7 +305,9 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INSERT INTO agent_stream_events", executed_sql)
         self.assertIn("INSERT INTO outbox_events", executed_sql)
         self.assertIn("FOR UPDATE", str(connection.executed[0][0]))
-        self.assertIn("status NOT IN ('completed', 'failed', 'cancelled', 'cancelling')", str(connection.executed[0][0]))
+        self.assertIn(
+            "status NOT IN ('completed', 'failed', 'cancelled', 'cancelling')", str(connection.executed[0][0])
+        )
         stream_insert = _first_executed_params(connection, "INSERT INTO agent_stream_events")
         outbox_insert = _first_executed_params(connection, "INSERT INTO outbox_events")
         self.assertEqual(stream_insert["payload_json"]["tool_call_id"], str(tool_call_id))
@@ -533,7 +537,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
                     "openai_call_id": "call_1",
                     "tool_name": "search_text",
                     "arguments_json": {"query": "["},
-                    "result_summary": "{\"ok\":false}",
+                    "result_summary": '{"ok":false}',
                     "output_ref": "agent-outputs/a/t.json",
                 }
             ]
@@ -545,7 +549,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output["call_id"], "call_1")
         self.assertEqual(output["name"], "search_text")
         self.assertEqual(output["arguments"], {"query": "["})
-        self.assertEqual(output["output"], "{\"ok\":false}")
+        self.assertEqual(output["output"], '{"ok":false}')
         self.assertEqual(output["output_ref"], "agent-outputs/a/t.json")
         self.assertIn("JOIN agent_turns", str(connection.executed[0][0]))
         self.assertIn("IN ('completed', 'failed', 'denied')", str(connection.executed[0][0]))
@@ -564,7 +568,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
                 {
                     "seq": 2,
                     "item_type": "function_call_output",
-                    "payload_json": {"type": "function_call_output", "output": "{\"ok\":true}"},
+                    "payload_json": {"type": "function_call_output", "output": '{"ok":true}'},
                     "source": "tool",
                     "response_id": None,
                 },
@@ -713,7 +717,7 @@ class FakeResult:
         self._rows = rows
         self.rowcount = len(rows) if rowcount is None else rowcount
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def all(self) -> list[dict]:

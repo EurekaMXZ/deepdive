@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
+from backend.db.connections import AsyncDbConnection
 from backend.events import EventEnvelope
 from backend.events.repositories import DbOutboxSink
 from backend.ids import new_uuid7
@@ -24,7 +26,7 @@ class ExistingSnapshot:
 
 
 class SnapshotRepository:
-    def __init__(self, connection) -> None:
+    def __init__(self, connection: AsyncDbConnection) -> None:
         self._connection = connection
 
     async def mark_analysis_snapshotting(self, *, analysis_id: UUID, agent_id: UUID, now: datetime) -> bool:
@@ -75,12 +77,12 @@ class SnapshotRepository:
         if row is None:
             return None
         return ExistingSnapshot(
-            id=row["id"],
-            manifest_key=row["manifest_key"],
-            git_bundle_key=row["git_bundle_key"],
-            resolved_commit_sha=row["resolved_commit_sha"],
-            tree_sha=row["tree_sha"],
-            file_count=row["file_count"],
+            id=cast(UUID, row["id"]),
+            manifest_key=cast(str | None, row["manifest_key"]),
+            git_bundle_key=cast(str | None, row["git_bundle_key"]),
+            resolved_commit_sha=str(row["resolved_commit_sha"]),
+            tree_sha=str(row["tree_sha"]),
+            file_count=cast(int | None, row["file_count"]),
         )
 
     async def insert_snapshot(self, result: SnapshotBuildResult, *, now: datetime) -> bool:
@@ -143,7 +145,7 @@ class SnapshotRepository:
         row = insert_result.mappings().first()
         if row is not None:
             return True
-        return not (hasattr(insert_result, "rowcount") and insert_result.rowcount == 0)
+        return int(cast(Any, getattr(insert_result, "rowcount", 1)) or 0) != 0
 
     async def insert_snapshot_files(self, result: SnapshotBuildResult, *, now: datetime) -> None:
         for file in result.files:
@@ -291,6 +293,8 @@ class SnapshotRepository:
         return True
 
     async def mark_failed(self, *, event: EventEnvelope, error_code: str, error_message: str, now: datetime) -> bool:
+        if event.analysis_id is None or event.agent_id is None:
+            raise ValueError("Snapshot failure event requires analysis_id and agent_id")
         result = await self._connection.execute(
             text(
                 """

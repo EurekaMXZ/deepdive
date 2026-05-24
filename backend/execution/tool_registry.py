@@ -6,7 +6,6 @@ from typing import Any
 
 from backend.config import ToolsConfig
 
-
 DEFAULT_TOOL_REGISTRY_VERSION = "analysis-tools-v2"
 
 
@@ -125,13 +124,25 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "query": {"type": "string"},
             "mode": {"type": "string", "enum": ["regex", "literal"]},
             "path_prefix": {"type": "string"},
-            "path_glob": {"type": ["string", "null"], "description": "Optional ripgrep path glob scoped under path_prefix."},
+            "path_glob": {
+                "type": ["string", "null"],
+                "description": "Optional ripgrep path glob scoped under path_prefix.",
+            },
             "case_sensitive": {"type": "boolean"},
             "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
             "max_results": {"type": "integer", "minimum": 1, "maximum": 100},
             "cursor": {"type": ["string", "null"], "description": "Opaque pagination cursor from a previous result."},
         },
-        "required": ["query", "mode", "path_prefix", "path_glob", "case_sensitive", "context_lines", "max_results", "cursor"],
+        "required": [
+            "query",
+            "mode",
+            "path_prefix",
+            "path_glob",
+            "case_sensitive",
+            "context_lines",
+            "max_results",
+            "cursor",
+        ],
         "additionalProperties": False,
     },
     "read_file": {
@@ -227,11 +238,11 @@ class ToolRegistry:
     hosted_tools: tuple[dict[str, Any], ...] = ()
 
     @classmethod
-    def default(cls) -> "ToolRegistry":
+    def default(cls) -> ToolRegistry:
         return cls.from_config(ToolsConfig())
 
     @classmethod
-    def from_config(cls, config: ToolsConfig) -> "ToolRegistry":
+    def from_config(cls, config: ToolsConfig) -> ToolRegistry:
         unknown_tools = tuple(name for name in config.enabled if name not in TOOL_DEFINITIONS)
         if unknown_tools:
             raise ValueError(f"unknown enabled tools: {', '.join(sorted(unknown_tools))}")

@@ -3,7 +3,6 @@ from __future__ import annotations
 from backend.events.envelope import EventEnvelope
 from backend.events.types import EventType
 
-
 ANALYSIS_COMMAND_TOPICS: dict[EventType, str] = {
     EventType.ANALYSIS_REQUESTED: "deepdive.analysis.commands",
     EventType.ANALYSIS_CANCEL_REQUESTED: "deepdive.analysis.commands",

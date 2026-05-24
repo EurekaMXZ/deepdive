@@ -3,14 +3,22 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from backend.events import EventEnvelope, EventType
-from backend.workers.analysis_runtime import AnalysisWorkerSettings, build_analysis_command_topics, load_analysis_worker_settings
+from backend.workers.analysis_runtime import (
+    AnalysisWorkerSettings,
+    build_analysis_command_topics,
+    load_analysis_worker_settings,
+)
 from backend.workers.outbox import WorkerSettings, load_worker_settings
-from backend.workers.snapshot_runtime import SnapshotWorkerSettings, build_snapshot_command_topics, load_snapshot_worker_settings
+from backend.workers.snapshot_runtime import (
+    SnapshotWorkerSettings,
+    build_snapshot_command_topics,
+    load_snapshot_worker_settings,
+)
 
 
 class WorkerEntrypointTest(unittest.TestCase):

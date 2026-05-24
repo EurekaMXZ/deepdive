@@ -7,6 +7,7 @@ from backend.events.kafka import ConsumedKafkaMessage
 from backend.events.runtime import publish_outbox_once, run_consumer_once
 from backend.ids import new_uuid7
 from backend.workers.analysis import AnalysisCommandHandler
+
 from tests.test_kafka_events import FakeKafkaProducer
 
 
@@ -97,7 +98,7 @@ class FakeResult:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def all(self) -> list[dict]:
@@ -112,7 +113,7 @@ class SingleMessageConsumer:
         self._message = message
         self._consumed = False
 
-    def __aiter__(self) -> "SingleMessageConsumer":
+    def __aiter__(self) -> SingleMessageConsumer:
         return self
 
     async def __anext__(self) -> ConsumedKafkaMessage:

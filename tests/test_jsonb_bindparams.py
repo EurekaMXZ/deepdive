@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from sqlalchemy.dialects.postgresql import JSONB
-
 from backend.api.services import PostgresAnalysisService
 from backend.events import EventEnvelope, EventType
 from backend.events.repositories import DbOutboxSink
 from backend.ids import new_uuid7
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 class JsonbBindparamTest(unittest.IsolatedAsyncioTestCase):
@@ -46,18 +45,18 @@ class JsonbBindparamTest(unittest.IsolatedAsyncioTestCase):
 
 
 class FakeDatabase:
-    def __init__(self, connection: "CapturingConnection") -> None:
+    def __init__(self, connection: CapturingConnection) -> None:
         self.connection = connection
 
-    def begin(self) -> "FakeTransaction":
+    def begin(self) -> FakeTransaction:
         return FakeTransaction(self.connection)
 
 
 class FakeTransaction:
-    def __init__(self, connection: "CapturingConnection") -> None:
+    def __init__(self, connection: CapturingConnection) -> None:
         self.connection = connection
 
-    async def __aenter__(self) -> "CapturingConnection":
+    async def __aenter__(self) -> CapturingConnection:
         return self.connection
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
@@ -83,7 +82,7 @@ class FakeResult:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def first(self) -> dict | None:

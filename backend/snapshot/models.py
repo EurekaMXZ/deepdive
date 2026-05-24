@@ -21,7 +21,7 @@ class SnapshotPolicy:
     secret_path_policy_version: str = SECRET_PATH_POLICY_VERSION
 
     @classmethod
-    def from_config(cls, config: SnapshotConfig) -> "SnapshotPolicy":
+    def from_config(cls, config: SnapshotConfig) -> SnapshotPolicy:
         return cls(
             max_file_bytes=config.max_file_bytes,
             max_git_bundle_bytes=config.max_git_bundle_bytes,
@@ -92,8 +92,7 @@ class SnapshotBuildResult:
 
 
 class SnapshotBuilder(Protocol):
-    def build(self, request: SnapshotBuildRequest) -> SnapshotBuildResult:
-        ...
+    def build(self, request: SnapshotBuildRequest) -> SnapshotBuildResult: ...
 
 
 class SnapshotBuildError(RuntimeError):

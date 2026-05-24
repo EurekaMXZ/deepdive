@@ -8,10 +8,12 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from datetime import date
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Protocol, cast
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -19,18 +21,50 @@ from backend.cache import LocalSourceCache, normalize_prefix, normalize_repo_pat
 from backend.config import AppConfig, CacheConfig, ReadFileToolConfig, SearchTextToolConfig, WebSearchToolConfig
 from backend.documents import DocumentRepository, DocumentService, DocumentToolError
 from backend.execution.envelopes import tool_error_envelope, tool_success_envelope
-from backend.execution.permissions import DEFAULT_TOOL_POLICY_HASH, DEFAULT_TOOL_POLICY_VERSION, PermissionDecision, PermissionEngine, PermissionResult
+from backend.execution.permissions import (
+    DEFAULT_TOOL_POLICY_HASH as DEFAULT_TOOL_POLICY_HASH,
+)
+from backend.execution.permissions import (
+    DEFAULT_TOOL_POLICY_VERSION as DEFAULT_TOOL_POLICY_VERSION,
+)
+from backend.execution.permissions import (
+    PermissionDecision,
+    PermissionEngine,
+)
+from backend.execution.permissions import (
+    PermissionResult as PermissionResult,
+)
 from backend.execution.ports import SnapshotToolRepository, ToolExecutionContext
-from backend.execution.tool_registry import DEFAULT_TOOL_REGISTRY_VERSION, ToolCapability, ToolDefinition, ToolRegistry
+from backend.execution.tool_registry import (
+    DEFAULT_TOOL_REGISTRY_VERSION as DEFAULT_TOOL_REGISTRY_VERSION,
+)
+from backend.execution.tool_registry import (
+    ToolCapability as ToolCapability,
+)
+from backend.execution.tool_registry import (
+    ToolDefinition as ToolDefinition,
+)
+from backend.execution.tool_registry import (
+    ToolRegistry as ToolRegistry,
+)
+from backend.ids import new_uuid7
 from backend.security import is_secret_path
 from backend.storage import ObjectStorage, evidence_key, tool_result_key
-from backend.ids import new_uuid7
+
+ToolHandler = Callable[[ToolExecutionContext, str, dict[str, Any], AppConfig | None], Awaitable[dict[str, Any]]]
+JsonObject = dict[str, Any]
 
 
-ToolHandler = Callable[
-    ["SourceToolExecutor", ToolExecutionContext, str, dict[str, Any], AppConfig | None],
-    Awaitable[dict[str, Any]],
-]
+class TavilyClient(Protocol):
+    def search(self, request: JsonObject, *, api_key: str, timeout_seconds: int) -> JsonObject: ...
+
+
+class ReadablePipe(Protocol):
+    closed: bool
+
+    def read1(self, size: int) -> bytes: ...
+
+    def close(self) -> None: ...
 
 
 class SourceToolExecutor:
@@ -46,7 +80,7 @@ class SourceToolExecutor:
         web_search_config: WebSearchToolConfig | None = None,
         cache_config: CacheConfig | None = None,
         tavily_api_key: str | None = None,
-        tavily_client=None,
+        tavily_client: TavilyClient | None = None,
         document_service: DocumentService | None = None,
     ) -> None:
         self._repository = repository
@@ -60,17 +94,18 @@ class SourceToolExecutor:
         self._tavily_api_key = tavily_api_key if tavily_api_key is not None else os.environ.get("TAVILY_API_KEY", "")
         self._tavily_client = tavily_client or TavilySearchClient()
         self._document_service = document_service or DocumentService(repository=DocumentRepository(), storage=storage)
+        document_tool_handler = self._execute_document_tool
         self._tool_handlers: dict[str, ToolHandler] = {
-            "list_files": _execute_list_files,
-            "search_file": _execute_search_file,
-            "read_file": _execute_read_file,
-            "search_text": _execute_search_text,
-            "web_search": _execute_web_search,
-            "document_create": _execute_document_tool,
-            "document_get": _execute_document_tool,
-            "document_update": _execute_document_tool,
-            "document_delete": _execute_document_tool,
-            "document_finalize": _execute_document_tool,
+            "list_files": self._execute_list_files,
+            "search_file": self._execute_search_file,
+            "read_file": self._execute_read_file,
+            "search_text": self._execute_search_text,
+            "web_search": self._execute_web_search,
+            "document_create": document_tool_handler,
+            "document_get": document_tool_handler,
+            "document_update": document_tool_handler,
+            "document_delete": document_tool_handler,
+            "document_finalize": document_tool_handler,
         }
 
     @property
@@ -85,7 +120,9 @@ class SourceToolExecutor:
         *,
         config: AppConfig | None = None,
     ) -> dict[str, Any]:
-        permission = self._permission_engine.evaluate_result(tool_name=tool_name, arguments=arguments, tools_config=config.tools if config else None)
+        permission = self._permission_engine.evaluate_result(
+            tool_name=tool_name, arguments=arguments, tools_config=config.tools if config else None
+        )
         if permission.decision is not PermissionDecision.ALLOW:
             return _error(tool_name, permission.reason_code, permission.message)
         handler = self._tool_handlers.get(tool_name)
@@ -93,7 +130,7 @@ class SourceToolExecutor:
             return _error(tool_name, "UNKNOWN_TOOL", f"Unknown tool: {tool_name}")
 
         try:
-            return await handler(self, context, tool_name, arguments, config)
+            return await handler(context, tool_name, arguments, config)
         except DocumentToolError as exc:
             return _error(tool_name, exc.code, exc.message)
         except TimeoutError:
@@ -102,11 +139,78 @@ class SourceToolExecutor:
             code = "CACHE_PREFIX_TOO_LARGE" if "max_prefix_bytes" in str(exc) else "INVALID_ARGUMENTS"
             return _error(tool_name, code, str(exc))
         except FileNotFoundError as exc:
-            return _error(tool_name, "SEARCH_BACKEND_UNAVAILABLE", f"Required command is unavailable: {exc}", retryable=True)
+            return _error(
+                tool_name, "SEARCH_BACKEND_UNAVAILABLE", f"Required command is unavailable: {exc}", retryable=True
+            )
         except subprocess.TimeoutExpired:
             return _error(tool_name, "SEARCH_TEXT_TIMEOUT", "Text search timed out.", retryable=True)
         except OSError as exc:
             return _error(tool_name, "TOOL_IO_ERROR", str(exc), retryable=True)
+
+    async def _execute_list_files(
+        self,
+        context: ToolExecutionContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        config: AppConfig | None,
+    ) -> dict[str, Any]:
+        del tool_name, config
+        return await self._list_files(context, arguments)
+
+    async def _execute_search_file(
+        self,
+        context: ToolExecutionContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        config: AppConfig | None,
+    ) -> dict[str, Any]:
+        del tool_name, config
+        return await self._search_file(context, arguments)
+
+    async def _execute_read_file(
+        self,
+        context: ToolExecutionContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        config: AppConfig | None,
+    ) -> dict[str, Any]:
+        del tool_name
+        read_config = config.tools.read_file if config is not None else self._read_config
+        return await self._read_file(context, arguments, read_config)
+
+    async def _execute_search_text(
+        self,
+        context: ToolExecutionContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        config: AppConfig | None,
+    ) -> dict[str, Any]:
+        del tool_name
+        search_config = config.tools.search_text if config is not None else self._search_config
+        cache_config = config.cache if config is not None else self._cache_config
+        return await self._search_text(context, arguments, search_config, cache_config)
+
+    async def _execute_web_search(
+        self,
+        context: ToolExecutionContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        config: AppConfig | None,
+    ) -> dict[str, Any]:
+        del tool_name
+        web_search_config = config.tools.web_search if config is not None else self._web_search_config
+        return await self._web_search(context, arguments, web_search_config)
+
+    async def _execute_document_tool(
+        self,
+        context: ToolExecutionContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        config: AppConfig | None,
+    ) -> dict[str, Any]:
+        del config
+        return await self._document_tool(context, tool_name, arguments)
+
     async def _list_files(self, context: ToolExecutionContext, arguments: dict[str, Any]) -> dict[str, Any]:
         path = arguments.get("path")
         if isinstance(path, str) and path:
@@ -122,8 +226,18 @@ class SourceToolExecutor:
             cursor=_optional_cursor(arguments.get("cursor")),
         )
         rows = _visible_file_rows(rows)
-        items, next_cursor = _page_rows(rows, max_results=_int_arg(arguments, "max_results", 100, 1, 100), cursor=arguments.get("cursor"))
-        return self._ok_with_ref(context, "list_files", context.snapshot_id, {"items": [_file_item(row) for row in items]}, [], next_cursor is not None, next_cursor)
+        items, next_cursor = _page_rows(
+            rows, max_results=_int_arg(arguments, "max_results", 100, 1, 100), cursor=arguments.get("cursor")
+        )
+        return self._ok_with_ref(
+            context,
+            "list_files",
+            context.snapshot_id,
+            {"items": [_file_item(row) for row in items]},
+            [],
+            next_cursor is not None,
+            next_cursor,
+        )
 
     async def _search_file(self, context: ToolExecutionContext, arguments: dict[str, Any]) -> dict[str, Any]:
         query = str(arguments.get("query", ""))
@@ -135,10 +249,22 @@ class SourceToolExecutor:
             cursor=_optional_cursor(arguments.get("cursor")),
         )
         rows = _visible_file_rows(rows)
-        items, next_cursor = _page_rows(rows, max_results=_int_arg(arguments, "max_results", 50, 1, 100), cursor=arguments.get("cursor"))
-        return self._ok_with_ref(context, "search_file", context.snapshot_id, {"items": [_file_item(row) for row in items]}, [], next_cursor is not None, next_cursor)
+        items, next_cursor = _page_rows(
+            rows, max_results=_int_arg(arguments, "max_results", 50, 1, 100), cursor=arguments.get("cursor")
+        )
+        return self._ok_with_ref(
+            context,
+            "search_file",
+            context.snapshot_id,
+            {"items": [_file_item(row) for row in items]},
+            [],
+            next_cursor is not None,
+            next_cursor,
+        )
 
-    async def _read_file(self, context: ToolExecutionContext, arguments: dict[str, Any], read_config: ReadFileToolConfig) -> dict[str, Any]:
+    async def _read_file(
+        self, context: ToolExecutionContext, arguments: dict[str, Any], read_config: ReadFileToolConfig
+    ) -> dict[str, Any]:
         path = normalize_repo_path(str(arguments["path"]))
         row = await self._repository.get_file(context.snapshot_id, path)
         if row is None:
@@ -184,7 +310,9 @@ class SourceToolExecutor:
             "content": selected,
         }
         next_start_line = actual_end + 1 if truncated else None
-        return self._ok_with_ref(context, "read_file", context.snapshot_id, result, [evidence_id_text], truncated, next_start_line)
+        return self._ok_with_ref(
+            context, "read_file", context.snapshot_id, result, [evidence_id_text], truncated, next_start_line
+        )
 
     async def _search_text(
         self,
@@ -233,29 +361,40 @@ class SourceToolExecutor:
         if returncode not in {0, 1}:
             message = _trim_error_output(stderr or output or "ripgrep failed")
             return _error("search_text", "SEARCH_TEXT_FAILED", message)
-        matches = []
-        evidence_ids = []
+        matches: list[dict[str, Any]] = []
+        evidence_ids: list[str] = []
         cursor_offset = _cursor_offset(arguments.get("cursor"))
         seen_matches = 0
         for line in output.splitlines():
             try:
-                event = json.loads(line)
+                event = _json_object(json.loads(line))
             except json.JSONDecodeError:
                 output_truncated = True
                 break
-            if event.get("type") != "match":
+            if event is None or event.get("type") != "match":
                 continue
             if seen_matches < cursor_offset:
                 seen_matches += 1
                 continue
-            data = event["data"]
-            match_path = Path(data["path"]["text"])
+            data = _json_object(event.get("data"))
+            path_data = _json_object(data.get("path") if data is not None else None)
+            lines_data = _json_object(data.get("lines") if data is not None else None)
+            if data is None or path_data is None or lines_data is None:
+                output_truncated = True
+                break
+            raw_path = path_data.get("text")
+            raw_line_number = data.get("line_number")
+            raw_text = lines_data.get("text")
+            if not isinstance(raw_path, str) or not isinstance(raw_line_number, int) or not isinstance(raw_text, str):
+                output_truncated = True
+                break
+            match_path = Path(raw_path)
             try:
                 rel_path = match_path.relative_to(root).as_posix()
             except ValueError:
                 return _error("search_text", "SEARCH_TEXT_FAILED", "ripgrep returned a path outside the snapshot cache")
-            line_number = data["line_number"]
-            text = data["lines"]["text"]
+            line_number = raw_line_number
+            text = raw_text
             if len(matches) >= max_results:
                 seen_matches += 1
                 break
@@ -279,7 +418,15 @@ class SourceToolExecutor:
             )
             seen_matches += 1
         next_cursor = str(cursor_offset + len(matches)) if seen_matches > cursor_offset + len(matches) else None
-        return self._ok_with_ref(context, "search_text", context.snapshot_id, {"matches": matches}, evidence_ids, output_truncated or next_cursor is not None, next_cursor)
+        return self._ok_with_ref(
+            context,
+            "search_text",
+            context.snapshot_id,
+            {"matches": matches},
+            evidence_ids,
+            output_truncated or next_cursor is not None,
+            next_cursor,
+        )
 
     async def _web_search(
         self,
@@ -293,10 +440,14 @@ class SourceToolExecutor:
         if not query:
             return _error("web_search", "INVALID_ARGUMENTS", "query must not be empty.")
         if len(query) > web_search_config.max_query_chars:
-            return _error("web_search", "INVALID_ARGUMENTS", f"query exceeds {web_search_config.max_query_chars} characters.")
+            return _error(
+                "web_search", "INVALID_ARGUMENTS", f"query exceeds {web_search_config.max_query_chars} characters."
+            )
         try:
-            max_results = _bounded_int_arg(arguments, "max_results", web_search_config.max_results, 1, min(web_search_config.max_results, 10))
-            request = {
+            max_results = _bounded_int_arg(
+                arguments, "max_results", web_search_config.max_results, 1, min(web_search_config.max_results, 10)
+            )
+            request: dict[str, Any] = {
                 "query": query,
                 "search_depth": _enum_arg(arguments, "search_depth", "basic", {"basic", "advanced"}),
                 "max_results": max_results,
@@ -312,7 +463,9 @@ class SourceToolExecutor:
                 value = arguments.get(name)
                 if value:
                     request[name] = _date_arg(value, name).isoformat()
-            if "start_date" in request and "end_date" in request and request["start_date"] > request["end_date"]:
+            start_date = request.get("start_date")
+            end_date = request.get("end_date")
+            if isinstance(start_date, str) and isinstance(end_date, str) and start_date > end_date:
                 raise ValueError("start_date must be before or equal to end_date")
             for name in ("include_domains", "exclude_domains"):
                 domains = _domain_list(arguments.get(name))
@@ -333,13 +486,15 @@ class SourceToolExecutor:
         except OSError:
             return _error("web_search", "WEB_SEARCH_FAILED", "Web search request failed.", retryable=True)
         except Exception as exc:
-            return _error("web_search", "WEB_SEARCH_FAILED", _trim_error_output(str(exc) or type(exc).__name__), retryable=True)
+            return _error(
+                "web_search", "WEB_SEARCH_FAILED", _trim_error_output(str(exc) or type(exc).__name__), retryable=True
+            )
 
         result = {
-            "query": payload.get("query", query) if isinstance(payload, dict) else query,
-            "results": [_web_search_result(item) for item in (payload.get("results") or []) if isinstance(item, dict)],
+            "query": payload.get("query", query),
+            "results": [_web_search_result(item) for item in _json_object_list(payload.get("results"))],
         }
-        if isinstance(payload, dict) and payload.get("response_time") is not None:
+        if payload.get("response_time") is not None:
             result["response_time"] = payload["response_time"]
         return self._ok_with_ref(
             context,
@@ -352,7 +507,9 @@ class SourceToolExecutor:
             scope={"type": "external_web", "snapshot_id": str(context.snapshot_id), "provider": "tavily"},
         )
 
-    async def _document_tool(self, context: ToolExecutionContext, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _document_tool(
+        self, context: ToolExecutionContext, tool_name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         if context.analysis_id is None:
             return _error(tool_name, "INVALID_ARGUMENTS", "Document tools require analysis_id.")
         try:
@@ -472,70 +629,6 @@ class SourceToolExecutor:
             self._cache.mark_prefix_covered(snapshot_id, prefix=prefix, file_count=len(rows), bytes_written=total)
 
 
-async def _execute_list_files(
-    executor: SourceToolExecutor,
-    context: ToolExecutionContext,
-    tool_name: str,
-    arguments: dict[str, Any],
-    config: AppConfig | None,
-) -> dict[str, Any]:
-    return await executor._list_files(context, arguments)
-
-
-async def _execute_search_file(
-    executor: SourceToolExecutor,
-    context: ToolExecutionContext,
-    tool_name: str,
-    arguments: dict[str, Any],
-    config: AppConfig | None,
-) -> dict[str, Any]:
-    return await executor._search_file(context, arguments)
-
-
-async def _execute_read_file(
-    executor: SourceToolExecutor,
-    context: ToolExecutionContext,
-    tool_name: str,
-    arguments: dict[str, Any],
-    config: AppConfig | None,
-) -> dict[str, Any]:
-    read_config = config.tools.read_file if config is not None else executor._read_config
-    return await executor._read_file(context, arguments, read_config)
-
-
-async def _execute_search_text(
-    executor: SourceToolExecutor,
-    context: ToolExecutionContext,
-    tool_name: str,
-    arguments: dict[str, Any],
-    config: AppConfig | None,
-) -> dict[str, Any]:
-    search_config = config.tools.search_text if config is not None else executor._search_config
-    cache_config = config.cache if config is not None else executor._cache_config
-    return await executor._search_text(context, arguments, search_config, cache_config)
-
-
-async def _execute_web_search(
-    executor: SourceToolExecutor,
-    context: ToolExecutionContext,
-    tool_name: str,
-    arguments: dict[str, Any],
-    config: AppConfig | None,
-) -> dict[str, Any]:
-    web_search_config = config.tools.web_search if config is not None else executor._web_search_config
-    return await executor._web_search(context, arguments, web_search_config)
-
-
-async def _execute_document_tool(
-    executor: SourceToolExecutor,
-    context: ToolExecutionContext,
-    tool_name: str,
-    arguments: dict[str, Any],
-    config: AppConfig | None,
-) -> dict[str, Any]:
-    return await executor._document_tool(context, tool_name, arguments)
-
-
 class TavilySearchClient:
     def search(self, request: dict[str, Any], *, api_key: str, timeout_seconds: int) -> dict[str, Any]:
         http_request = urllib.request.Request(
@@ -555,6 +648,20 @@ class TavilySearchClient:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:4096]
             raise RuntimeError(f"Tavily Search API failed: {exc.code} {detail}") from exc
+
+
+def _json_object(value: Any) -> dict[str, Any] | None:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else None
+
+
+def _json_object_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for item in cast(list[Any], value):
+        if isinstance(item, dict):
+            items.append(cast(dict[str, Any], item))
+    return items
 
 
 def _int_arg(arguments: dict[str, Any], name: str, default: int, minimum: int, maximum: int) -> int:
@@ -588,10 +695,11 @@ def _domain_list(value: Any) -> list[str]:
         return []
     if not isinstance(value, list):
         raise ValueError("domains must be an array")
-    if len(value) > 20:
+    raw_items = cast(list[Any], value)
+    if len(raw_items) > 20:
         raise ValueError("domains must contain at most 20 items")
-    domains = []
-    for item in value:
+    domains: list[str] = []
+    for item in raw_items:
         domain = str(item).strip().lower()
         if not _is_public_domain(domain):
             raise ValueError(f"invalid domain: {domain}")
@@ -620,7 +728,10 @@ def _is_public_domain(domain: str) -> bool:
     labels = domain.split(".")
     if len(labels) < 2:
         return False
-    return all(label and label.replace("-", "").isalnum() and not label.startswith("-") and not label.endswith("-") for label in labels)
+    return all(
+        label and label.replace("-", "").isalnum() and not label.startswith("-") and not label.endswith("-")
+        for label in labels
+    )
 
 
 def _web_search_result(item: dict[str, Any]) -> dict[str, Any]:
@@ -675,12 +786,9 @@ def _page_rows(rows: list[dict[str, Any]], *, max_results: int, cursor: Any) -> 
 def _is_unsafe_glob(value: str) -> bool:
     normalized = value.replace("\\", "/")
     return (
-        normalized.startswith("/")
-        or normalized.startswith("//")
-        or normalized.startswith("~")
+        normalized.startswith(("/", "//", "~", "../"))
         or ":" in normalized
         or normalized == ".."
-        or normalized.startswith("../")
         or "/../" in normalized
         or normalized.endswith("/..")
     )
@@ -775,8 +883,9 @@ def _run_ripgrep_json(
         nonlocal output_truncated
         if process.stdout is None:
             return
+        stdout_pipe = cast(ReadablePipe, process.stdout)
         while True:
-            chunk = process.stdout.read1(8192)
+            chunk = stdout_pipe.read1(8192)
             if not chunk:
                 return
             with lock:
@@ -792,8 +901,9 @@ def _run_ripgrep_json(
     def read_stderr() -> None:
         if process.stderr is None:
             return
+        stderr_pipe = cast(ReadablePipe, process.stderr)
         while True:
-            chunk = process.stderr.read1(4096)
+            chunk = stderr_pipe.read1(4096)
             if not chunk:
                 return
             with lock:
@@ -810,10 +920,8 @@ def _run_ripgrep_json(
     except subprocess.TimeoutExpired:
         if process.poll() is None:
             process.kill()
-        try:
+        with suppress(subprocess.TimeoutExpired):
             process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            pass
         stdout_thread.join(timeout=1)
         stderr_thread.join(timeout=1)
         _close_pipe(process.stdout)
@@ -839,5 +947,5 @@ def _is_sha256_hash(value: str) -> bool:
     prefix = "sha256:"
     if not value.startswith(prefix):
         return False
-    digest = value[len(prefix):]
+    digest = value[len(prefix) :]
     return len(digest) == 64 and all(char in "0123456789abcdefABCDEF" for char in digest)

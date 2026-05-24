@@ -16,7 +16,7 @@ from backend.agent.context_items import (
     function_call_output_payload,
     tool_output_idempotency_key,
 )
-from backend.db.connections import connection_from
+from backend.db.connections import AsyncDbConnection, ConnectionSource, connection_from
 from backend.events import EventEnvelope
 from backend.events.repositories import DbOutboxSink
 from backend.execution import SnapshotToolRepository
@@ -25,7 +25,7 @@ from backend.security import visible_path_sql
 
 
 class PostgresSnapshotToolRepository(SnapshotToolRepository):
-    def __init__(self, connection_or_database) -> None:
+    def __init__(self, connection_or_database: ConnectionSource) -> None:
         self._connection_or_database = connection_or_database
 
     def _connection(self):
@@ -82,7 +82,13 @@ class PostgresSnapshotToolRepository(SnapshotToolRepository):
                     OFFSET :offset
                     """
                 ),
-                {"snapshot_id": snapshot_id, "limit": max_results, "offset": offset, "glob_pattern": _glob_to_like(glob), **params},
+                {
+                    "snapshot_id": snapshot_id,
+                    "limit": max_results,
+                    "offset": offset,
+                    "glob_pattern": _glob_to_like(glob),
+                    **params,
+                },
             )
         return [dict(row) for row in result.mappings().all()]
 
@@ -193,7 +199,7 @@ class PostgresSnapshotToolRepository(SnapshotToolRepository):
 class PostgresToolCallRepository:
     claim_ttl_seconds = 900
 
-    def __init__(self, connection_or_database) -> None:
+    def __init__(self, connection_or_database: ConnectionSource) -> None:
         self._connection_or_database = connection_or_database
 
     def _connection(self):
@@ -330,7 +336,7 @@ class PostgresToolCallRepository:
                 {"analysis_id": analysis_id},
             )
         row = result.mappings().first()
-        return row["status"] if row is not None else None
+        return str(row["status"]) if row is not None else None
 
     async def mark_started(self, tool_call_id: UUID) -> None:
         async with self._connection() as connection:
@@ -422,8 +428,7 @@ class PostgresToolCallRepository:
                     WHERE id = :tool_call_id
                       AND status <> 'cancelled'
                     """
-                )
-                ,
+                ),
                 {
                     "tool_call_id": tool_call_id,
                     "status": status,
@@ -484,7 +489,9 @@ class PostgresToolCallRepository:
             await DbOutboxSink(connection).add(event)
         return True
 
-    async def add_stream_event(self, *, analysis_id: UUID, agent_id: UUID, event_type: str, payload: dict[str, Any]) -> None:
+    async def add_stream_event(
+        self, *, analysis_id: UUID, agent_id: UUID, event_type: str, payload: dict[str, Any]
+    ) -> None:
         async with self._connection() as connection:
             await self._add_stream_event_on_connection(
                 connection,
@@ -496,7 +503,7 @@ class PostgresToolCallRepository:
 
     async def _add_stream_event_on_connection(
         self,
-        connection,
+        connection: AsyncDbConnection,
         *,
         analysis_id: UUID,
         agent_id: UUID,
@@ -541,7 +548,7 @@ class PostgresToolCallRepository:
 
 
 async def _update_terminal_tool_call(
-    connection,
+    connection: AsyncDbConnection,
     *,
     tool_call_id: UUID,
     status: str,
@@ -553,7 +560,7 @@ async def _update_terminal_tool_call(
     error_message: str | None,
     claim_owner: str | None,
 ) -> bool:
-    result = await connection.execute(
+    update_result = await connection.execute(
         text(
             """
             UPDATE tool_calls
@@ -586,11 +593,11 @@ async def _update_terminal_tool_call(
             "completed_at": datetime.now(UTC),
         },
     )
-    return int(getattr(result, "rowcount", 0) or 0) > 0
+    return int(getattr(update_result, "rowcount", 0) or 0) > 0
 
 
 async def _append_tool_result_context_item(
-    connection,
+    connection: AsyncDbConnection,
     *,
     agent_id: UUID,
     tool_call_id: UUID,
@@ -646,7 +653,7 @@ def _visible_path_sql() -> str:
 
 
 def _escape_like(value: str) -> str:
-    escaped = []
+    escaped: list[str] = []
     for char in value:
         if char in {"%", "_", "\\"}:
             escaped.append("\\" + char)

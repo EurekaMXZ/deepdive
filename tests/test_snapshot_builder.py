@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from backend.config import SnapshotConfig
 from backend.ids import new_uuid7
-from backend.snapshot import GitSnapshotBuilder, GitTreeEntry, SnapshotBuildRequest, SnapshotPolicy
 from backend.security.secret_paths import SECRET_PATH_POLICY_VERSION
+from backend.snapshot import GitSnapshotBuilder, GitTreeEntry, SnapshotBuildRequest, SnapshotPolicy
 from backend.snapshot.scanner import SnapshotScanner
 from backend.storage import InMemoryObjectStorage
 
@@ -324,7 +324,9 @@ class FakeGitRunner:
                 for file_path in sorted(root.rglob("*")):
                     archive.add(file_path, arcname=file_path.relative_to(root).as_posix())
 
-    def cat_file_blob(self, mirror_path: Path, oid: str, *, timeout_seconds: int, max_output_bytes: int | None = None) -> bytes:
+    def cat_file_blob(
+        self, mirror_path: Path, oid: str, *, timeout_seconds: int, max_output_bytes: int | None = None
+    ) -> bytes:
         del mirror_path, timeout_seconds, max_output_bytes
         return {
             "a" * 40: b"Root instructions\n",
@@ -346,10 +348,14 @@ class NoArchiveGitRunner(FakeGitRunner):
         self.archive_created = True
         raise AssertionError("snapshot builder must not create and extract a full git archive")
 
-    def cat_file_blob(self, mirror_path: Path, oid: str, *, timeout_seconds: int, max_output_bytes: int | None = None) -> bytes:
+    def cat_file_blob(
+        self, mirror_path: Path, oid: str, *, timeout_seconds: int, max_output_bytes: int | None = None
+    ) -> bytes:
         self.cat_file_oids.append(oid)
         self.cat_file_limits.append(max_output_bytes)
-        return super().cat_file_blob(mirror_path, oid, timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes)
+        return super().cat_file_blob(
+            mirror_path, oid, timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes
+        )
 
 
 class LargeBundleGitRunner(FakeGitRunner):

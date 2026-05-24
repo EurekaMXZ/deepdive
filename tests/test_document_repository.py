@@ -84,7 +84,7 @@ class FakeResult:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def first(self) -> dict | None:

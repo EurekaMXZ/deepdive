@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import json
 import unittest
+from datetime import UTC, datetime
 
 from backend.agent import (
     AgentCommandHandler,
@@ -268,7 +268,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                         "type": "function_call",
                         "call_id": "call_1",
                         "name": "read_file",
-                        "arguments": "{\"path\":\"package.json\"}",
+                        "arguments": '{"path":"package.json"}',
                     },
                 },
                 {
@@ -277,7 +277,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                     "payload_json": {
                         "type": "function_call_output",
                         "call_id": "call_1",
-                        "output": "{\"ok\":true,\"result\":{\"path\":\"package.json\",\"content\":\"vite\"}}",
+                        "output": '{"ok":true,"result":{"path":"package.json","content":"vite"}}',
                     },
                 },
             ],
@@ -295,7 +295,9 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         )
 
         context_text = "\n".join(_text_parts(context["input"]))
-        replayed_payloads = [item for item in context["input"] if item.get("type") in {"function_call", "function_call_output"}]
+        replayed_payloads = [
+            item for item in context["input"] if item.get("type") in {"function_call", "function_call_output"}
+        ]
         self.assertIn("本地持久化的模型可见历史", context_text)
         self.assertIn("不要重新开始", context_text)
         self.assertEqual([item["type"] for item in replayed_payloads], ["function_call", "function_call_output"])
@@ -326,7 +328,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "已 compact 的上下文摘要：\n{\"next_action\":\"继续检查 src\"}",
+                            "text": '已 compact 的上下文摘要:\n{"next_action":"继续检查 src"}',
                         }
                     ],
                 }
@@ -338,7 +340,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                     "payload_json": {
                         "type": "function_call_output",
                         "call_id": "call_2",
-                        "output": "{\"ok\":true}",
+                        "output": '{"ok":true}',
                     },
                 }
             ],
@@ -416,7 +418,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                     "payload_json": {
                         "type": "function_call_output",
                         "call_id": "call_current",
-                        "output": "{\"ok\":true,\"result\":{\"path\":\"README.md\"}}",
+                        "output": '{"ok":true,"result":{"path":"README.md"}}',
                     },
                 },
                 {
@@ -425,7 +427,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                     "payload_json": {
                         "type": "function_call_output",
                         "call_id": "call_previous",
-                        "output": "{\"ok\":true,\"result\":{\"path\":\"src/App.tsx\"}}",
+                        "output": '{"ok":true,"result":{"path":"src/App.tsx"}}',
                     },
                 },
             ],
@@ -438,7 +440,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 {
                     "type": "function_call_output",
                     "call_id": "call_current",
-                    "output": "{\"ok\":true}",
+                    "output": '{"ok":true}',
                 }
             ],
             include_local_history=True,
@@ -474,7 +476,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                         "type": "function_call",
                         "call_id": "call_1",
                         "name": "read_file",
-                        "arguments": "{\"path\":\"README.md\"}",
+                        "arguments": '{"path":"README.md"}',
                     },
                 },
                 {
@@ -483,7 +485,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                     "payload_json": {
                         "type": "function_call_output",
                         "call_id": "call_1",
-                        "output": "{\"ok\":true,\"result\":{\"path\":\"README.md\"}}",
+                        "output": '{"ok":true,"result":{"path":"README.md"}}',
                     },
                 },
             ],
@@ -500,7 +502,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         replay_text = "\n".join(text for text in _text_parts(context["input"]) if "本地持久化" in text)
         self.assertEqual(function_call_items, [repository.uncompacted_context_items[0]["payload_json"]])
         self.assertEqual(function_output_items, [repository.uncompacted_context_items[1]["payload_json"]])
-        self.assertNotIn("\"payload\"", replay_text)
+        self.assertNotIn('"payload"', replay_text)
 
     async def test_auto_compaction_summary_uses_configured_goal_not_hardcoded_repo_analysis(self) -> None:
         analysis_id = new_uuid7()
@@ -532,7 +534,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                     "payload_json": {
                         "type": "function_call_output",
                         "call_id": "call_1",
-                        "output": "{\"ok\":true,\"result\":{\"path\":\"backend/agent/context.py\"}}",
+                        "output": '{"ok":true,"result":{"path":"backend/agent/context.py"}}',
                     },
                 }
             ],
@@ -883,7 +885,10 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event_types, ["status", "delta", "done"])
         self.assertEqual(repository.stream_events[1]["payload"], {"text": "分析完成"})
         self.assertEqual(repository.stream_events[1]["response_id"], "resp_1")
-        self.assertEqual(repository.stream_events[2]["payload"], {"status": "completed", "response_id": "resp_1", "output_ref": f"agent-outputs/{agent_id}/{turn_id}.json"})
+        self.assertEqual(
+            repository.stream_events[2]["payload"],
+            {"status": "completed", "response_id": "resp_1", "output_ref": f"agent-outputs/{agent_id}/{turn_id}.json"},
+        )
         self.assertEqual(repository.completed_text, "分析完成")
 
     async def test_raw_model_stream_events_are_not_published_live_and_final_output_is_persisted(self) -> None:
@@ -916,7 +921,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                         "type": "response.function_call_arguments.delta",
                         "response_id": "resp_1",
                         "item_id": "fc_1",
-                        "delta": "{\"path\":",
+                        "delta": '{"path":',
                     },
                 },
                 {
@@ -1016,7 +1021,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                                     "summary": [
                                         {
                                             "type": "summary_text",
-                                            "text": "我会先查看仓库结构，再读取入口文件。",
+                                            "text": "我会先查看仓库结构, 再读取入口文件。",
                                         }
                                     ],
                                 },
@@ -1058,7 +1063,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             persisted_summary_events[0]["payload"],
             {
                 "type": "model_reasoning_summary",
-                "text": "我会先查看仓库结构，再读取入口文件。",
+                "text": "我会先查看仓库结构, 再读取入口文件。",
                 "item_id": "rs_1",
                 "response_id": "resp_1",
             },
@@ -1500,7 +1505,9 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         handler = AgentCommandHandler(
             repository=repository,
             context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
-            responses_runner=FailingResponsesRunner(IncompleteResponseStreamError("OpenAI Responses stream ended before response.completed")),
+            responses_runner=FailingResponsesRunner(
+                IncompleteResponseStreamError("OpenAI Responses stream ended before response.completed")
+            ),
             config=AppConfig.default(),
         )
 
@@ -1544,7 +1551,9 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         handler = AgentCommandHandler(
             repository=repository,
             context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
-            responses_runner=FailingResponsesRunner(IncompleteResponseStreamError("OpenAI Responses stream ended before response.completed")),
+            responses_runner=FailingResponsesRunner(
+                IncompleteResponseStreamError("OpenAI Responses stream ended before response.completed")
+            ),
             config=AppConfig.default(),
         )
 
@@ -1679,7 +1688,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                                 "type": "function_call",
                                 "call_id": "call_1",
                                 "name": "read_file",
-                                "arguments": "{\"path\":\"backend/api/app.py\"}",
+                                "arguments": '{"path":"backend/api/app.py"}',
                                 "status": "completed",
                                 "phase": "tool_calling",
                             },
@@ -1711,7 +1720,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 "call_id": "call_1",
                 "name": "read_file",
                 "arguments": {"path": "backend/api/app.py"},
-                "output": "{\"ok\":true}",
+                "output": '{"ok":true}',
                 "output_ref": previous_output_ref,
             },
         )
@@ -1766,7 +1775,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                                 "type": "function_call",
                                 "call_id": "call_1",
                                 "name": "read_file",
-                                "arguments": "{\"path\":\"backend/api/app.py\"}",
+                                "arguments": '{"path":"backend/api/app.py"}',
                             }
                         ],
                     },
@@ -1786,7 +1795,11 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 turn_count=1,
                 max_turns=10,
                 effective_limits_json={"auto_compact_threshold_tokens": 120000},
-                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False, "use_previous_response_id": True},
+                effective_runtime_json={
+                    "reasoning_effort": "medium",
+                    "parallel_tool_calls": False,
+                    "use_previous_response_id": True,
+                },
             ),
             turn_id=new_uuid7(),
             tool_call_id=new_uuid7(),
@@ -1794,7 +1807,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 "call_id": "call_1",
                 "name": "read_file",
                 "arguments": {"path": "backend/api/app.py"},
-                "output": "{\"ok\":true}",
+                "output": '{"ok":true}',
                 "output_ref": previous_output_ref,
             },
         )
@@ -1824,7 +1837,9 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(handler._responses_runner.requests[0]["previous_response_id"], "resp_1")
         self.assertEqual(handler._responses_runner.requests[0]["input"][-1]["type"], "function_call_output")
-        self.assertNotIn("function_call", [item.get("type") for item in handler._responses_runner.requests[0]["input"][:-1]])
+        self.assertNotIn(
+            "function_call", [item.get("type") for item in handler._responses_runner.requests[0]["input"][:-1]]
+        )
 
     async def test_responses_request_uses_service_tier_from_session_runtime_snapshot(self) -> None:
         analysis_id = new_uuid7()
@@ -1842,7 +1857,11 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 turn_count=0,
                 max_turns=10,
                 effective_limits_json={"auto_compact_threshold_tokens": 120000},
-                effective_runtime_json={"reasoning_effort": "low", "service_tier": "priority", "parallel_tool_calls": False},
+                effective_runtime_json={
+                    "reasoning_effort": "low",
+                    "service_tier": "priority",
+                    "parallel_tool_calls": False,
+                },
             ),
             turn_id=new_uuid7(),
             tool_call_id=new_uuid7(),
@@ -2304,7 +2323,10 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertNotIn("late delta", [event["payload"].get("text") for event in repository.stream_events if event["event_type"] == "delta"])
+        self.assertNotIn(
+            "late delta",
+            [event["payload"].get("text") for event in repository.stream_events if event["event_type"] == "delta"],
+        )
         self.assertEqual(repository.completed_turns, [])
         self.assertEqual(repository.tool_calls, [])
         self.assertEqual(repository.outbox_events, [])
@@ -3128,7 +3150,7 @@ class FakeAgentRepository(AgentRepository):
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "已 compact 的上下文摘要：\n"
+                            "text": "已 compact 的上下文摘要:\n"
                             + json.dumps(self.latest_memory_summary, ensure_ascii=False),
                         }
                     ],
@@ -3277,9 +3299,7 @@ class FakeAgentRepository(AgentRepository):
         self.memory_summaries.append(kwargs)
         compacted_until_seq = int(kwargs["compacted_until_seq"])
         self.uncompacted_context_items = [
-            item
-            for item in self.uncompacted_context_items
-            if int(item.get("seq") or 0) > compacted_until_seq
+            item for item in self.uncompacted_context_items if int(item.get("seq") or 0) > compacted_until_seq
         ]
 
     async def add_outbox(self, event: EventEnvelope):

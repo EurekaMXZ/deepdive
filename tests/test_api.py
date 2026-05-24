@@ -3,9 +3,8 @@ from __future__ import annotations
 import unittest
 import uuid
 
-from fastapi.testclient import TestClient
-
 from backend.api.app import create_app
+from fastapi.testclient import TestClient
 
 
 class AnalysisApiTest(unittest.TestCase):

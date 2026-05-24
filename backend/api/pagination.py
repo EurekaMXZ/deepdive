@@ -17,7 +17,7 @@ def decode_list_cursor(value: str | None) -> tuple[datetime, UUID] | None:
         return None
     try:
         decoded = _decode_cursor_text(value)
-    except (ValueError, UnicodeDecodeError):
+    except ValueError, UnicodeDecodeError:
         return None
     if "|" not in decoded:
         return None

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from backend.agent.models import AgentSessionState
 from backend.agent.ports import ContextAssemblyRepository
@@ -29,13 +29,13 @@ class ContextCompactor:
     async def _goal(self, *, session: AgentSessionState) -> str:
         config = app_config_from_json(await self._repository.load_config_snapshot(session=session))
         profile = config.analysis.profiles[config.analysis.default_profile]
-        return profile.goal or f"继续执行分析 profile：{config.analysis.default_profile}。"
+        return profile.goal or f"继续执行分析 profile: {config.analysis.default_profile}."
 
 
 def _next_action(*, goal: str, focus_paths: list[str]) -> str:
     if focus_paths:
-        return f"继续围绕 {', '.join(focus_paths[:5])} 推进当前任务：{goal}"
-    return f"继续推进当前任务：{goal}"
+        return f"继续围绕 {', '.join(focus_paths[:5])} 推进当前任务: {goal}"
+    return f"继续推进当前任务: {goal}"
 
 
 def _completed_steps_from_context_items(context_items: list[dict[str, Any]]) -> list[str]:
@@ -44,6 +44,7 @@ def _completed_steps_from_context_items(context_items: list[dict[str, Any]]) -> 
         payload = item.get("payload_json")
         if not isinstance(payload, dict):
             continue
+        payload = cast(dict[str, Any], payload)
         item_type = str(item.get("item_type") or payload.get("type") or "")
         if item_type == "function_call":
             name = str(payload.get("name") or "tool")
@@ -55,7 +56,7 @@ def _completed_steps_from_context_items(context_items: list[dict[str, Any]]) -> 
         elif item_type == "assistant_output":
             text = _context_payload_text(payload)
             if text:
-                steps.append("已生成回答片段：" + text[:240])
+                steps.append("已生成回答片段: " + text[:240])
     return steps[:20]
 
 
@@ -65,6 +66,7 @@ def _confirmed_facts_from_context_items(context_items: list[dict[str, Any]]) -> 
         payload = item.get("payload_json")
         if not isinstance(payload, dict):
             continue
+        payload = cast(dict[str, Any], payload)
         item_type = str(item.get("item_type") or payload.get("type") or "")
         if item_type == "function_call_output":
             text = str(payload.get("output") or "")
@@ -82,7 +84,7 @@ def _focus_paths_from_context_items(context_items: list[dict[str, Any]]) -> list
     for item in context_items:
         payload = item.get("payload_json")
         if isinstance(payload, dict):
-            paths.extend(_repo_paths_from_text(json.dumps(payload, ensure_ascii=False)))
+            paths.extend(_repo_paths_from_text(json.dumps(cast(dict[str, Any], payload), ensure_ascii=False)))
     return _dedupe_preserve_order(paths)[:50]
 
 
@@ -93,8 +95,14 @@ def _context_payload_text(payload: dict[str, Any]) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = [part.get("text") for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)]
-        return "\n".join(str(part) for part in parts)
+        parts: list[str] = []
+        for part in cast(list[Any], content):
+            if isinstance(part, dict):
+                part_object = cast(dict[str, Any], part)
+                text = part_object.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
     return ""
 
 

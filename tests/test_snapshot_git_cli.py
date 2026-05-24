@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from backend.snapshot.git_cli import GitCommandRunner
@@ -14,25 +14,29 @@ class GitCommandRunnerTest(unittest.TestCase):
     def test_clone_mirror_rejects_repository_url_with_userinfo(self) -> None:
         runner = GitCommandRunner()
 
-        with patch("backend.snapshot.git_cli.subprocess.run") as run_mock:
-            with self.assertRaisesRegex(SnapshotBuildError, "credentials"):
-                runner.clone_mirror(
-                    "https://token123@github.com/example/private.git",
-                    Path("repo.git"),
-                    timeout_seconds=30,
-                )
+        with (
+            patch("backend.snapshot.git_cli.subprocess.run") as run_mock,
+            self.assertRaisesRegex(SnapshotBuildError, "credentials"),
+        ):
+            runner.clone_mirror(
+                "https://token123@github.com/example/private.git",
+                Path("repo.git"),
+                timeout_seconds=30,
+            )
 
         run_mock.assert_not_called()
 
     def test_run_rejects_repository_url_with_userinfo_before_git_is_spawned(self) -> None:
         runner = GitCommandRunner()
 
-        with patch("backend.snapshot.git_cli.subprocess.run") as run_mock:
-            with self.assertRaisesRegex(SnapshotBuildError, "credentials"):
-                runner.run(
-                    ["clone", "https://token123@github.com/example/private.git", "repo.git"],
-                    timeout_seconds=30,
-                )
+        with (
+            patch("backend.snapshot.git_cli.subprocess.run") as run_mock,
+            self.assertRaisesRegex(SnapshotBuildError, "credentials"),
+        ):
+            runner.run(
+                ["clone", "https://token123@github.com/example/private.git", "repo.git"],
+                timeout_seconds=30,
+            )
 
         run_mock.assert_not_called()
 
@@ -43,10 +47,12 @@ class GitCommandRunnerTest(unittest.TestCase):
             "https://github.com/example/private.git?token=secret",
             "https://github.com/example/private.git#access_token=secret",
         ):
-            with self.subTest(repository_url=repository_url):
-                with patch("backend.snapshot.git_cli.subprocess.Popen") as popen_mock:
-                    with self.assertRaisesRegex(SnapshotBuildError, "query or fragment"):
-                        runner.clone_mirror(repository_url, Path("repo.git"), timeout_seconds=30)
+            with (
+                self.subTest(repository_url=repository_url),
+                patch("backend.snapshot.git_cli.subprocess.Popen") as popen_mock,
+                self.assertRaisesRegex(SnapshotBuildError, "query or fragment"),
+            ):
+                runner.clone_mirror(repository_url, Path("repo.git"), timeout_seconds=30)
 
                 popen_mock.assert_not_called()
 
@@ -64,8 +70,13 @@ class GitCommandRunnerTest(unittest.TestCase):
                 },
                 clear=True,
             ),
-            patch("backend.snapshot.git_cli.socket.getaddrinfo", return_value=[(None, None, None, None, ("140.82.112.4", 443))]),
-            patch("backend.snapshot.git_cli.subprocess.Popen", return_value=FakeProcess(stdout=[b"ok\n"])) as popen_mock,
+            patch(
+                "backend.snapshot.git_cli.socket.getaddrinfo",
+                return_value=[(None, None, None, None, ("140.82.112.4", 443))],
+            ),
+            patch(
+                "backend.snapshot.git_cli.subprocess.Popen", return_value=FakeProcess(stdout=[b"ok\n"])
+            ) as popen_mock,
         ):
             output = runner.run(["ls-remote", "https://github.com/example/project.git"], timeout_seconds=30)
 
@@ -73,16 +84,19 @@ class GitCommandRunnerTest(unittest.TestCase):
         command = popen_mock.call_args.args[0]
         kwargs = popen_mock.call_args.kwargs
         env = kwargs["env"]
-        self.assertEqual(command[:8], [
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "core.askPass=",
-            "-c",
-            "http.extraHeader=",
-            "-c",
-        ])
+        self.assertEqual(
+            command[:8],
+            [
+                "git",
+                "-c",
+                "credential.helper=",
+                "-c",
+                "core.askPass=",
+                "-c",
+                "http.extraHeader=",
+                "-c",
+            ],
+        )
         self.assertIn("protocol.file.allow=never", command)
         self.assertNotIn("url.https://github.com/.insteadOf=", command)
         self.assertEqual(env["GIT_CONFIG_NOSYSTEM"], "1")
@@ -97,13 +111,15 @@ class GitCommandRunnerTest(unittest.TestCase):
     def test_clone_mirror_rejects_non_https_repository_url(self) -> None:
         runner = GitCommandRunner()
 
-        with patch("backend.snapshot.git_cli.subprocess.run") as run_mock:
-            with self.assertRaisesRegex(SnapshotBuildError, "HTTPS"):
-                runner.clone_mirror(
-                    "http://github.com/example/project.git",
-                    Path("repo.git"),
-                    timeout_seconds=30,
-                )
+        with (
+            patch("backend.snapshot.git_cli.subprocess.run") as run_mock,
+            self.assertRaisesRegex(SnapshotBuildError, "HTTPS"),
+        ):
+            runner.clone_mirror(
+                "http://github.com/example/project.git",
+                Path("repo.git"),
+                timeout_seconds=30,
+            )
 
         run_mock.assert_not_called()
 
@@ -115,36 +131,42 @@ class GitCommandRunnerTest(unittest.TestCase):
             "github.com:example/project.git",
             "git@internal.example:project.git",
         ):
-            with self.subTest(repository_url=repository_url):
-                with patch("backend.snapshot.git_cli.subprocess.Popen") as popen_mock:
-                    with self.assertRaisesRegex(SnapshotBuildError, "HTTPS"):
-                        runner.clone_mirror(repository_url, Path("repo.git"), timeout_seconds=30)
+            with (
+                self.subTest(repository_url=repository_url),
+                patch("backend.snapshot.git_cli.subprocess.Popen") as popen_mock,
+                self.assertRaisesRegex(SnapshotBuildError, "HTTPS"),
+            ):
+                runner.clone_mirror(repository_url, Path("repo.git"), timeout_seconds=30)
 
                 popen_mock.assert_not_called()
 
     def test_clone_mirror_rejects_localhost_repository_url(self) -> None:
         runner = GitCommandRunner()
 
-        with patch("backend.snapshot.git_cli.subprocess.run") as run_mock:
-            with self.assertRaisesRegex(SnapshotBuildError, "private or local"):
-                runner.clone_mirror(
-                    "https://127.0.0.1/example/project.git",
-                    Path("repo.git"),
-                    timeout_seconds=30,
-                )
+        with (
+            patch("backend.snapshot.git_cli.subprocess.run") as run_mock,
+            self.assertRaisesRegex(SnapshotBuildError, "private or local"),
+        ):
+            runner.clone_mirror(
+                "https://127.0.0.1/example/project.git",
+                Path("repo.git"),
+                timeout_seconds=30,
+            )
 
         run_mock.assert_not_called()
 
     def test_clone_mirror_rejects_non_github_repository_url(self) -> None:
         runner = GitCommandRunner()
 
-        with patch("backend.snapshot.git_cli.subprocess.Popen") as popen_mock:
-            with self.assertRaisesRegex(SnapshotBuildError, "host is not allowed"):
-                runner.clone_mirror(
-                    "https://internal.example/project.git",
-                    Path("repo.git"),
-                    timeout_seconds=30,
-                )
+        with (
+            patch("backend.snapshot.git_cli.subprocess.Popen") as popen_mock,
+            self.assertRaisesRegex(SnapshotBuildError, "host is not allowed"),
+        ):
+            runner.clone_mirror(
+                "https://internal.example/project.git",
+                Path("repo.git"),
+                timeout_seconds=30,
+            )
 
         popen_mock.assert_not_called()
 
@@ -152,22 +174,27 @@ class GitCommandRunnerTest(unittest.TestCase):
         runner = GitCommandRunner()
 
         with (
-            patch("backend.snapshot.git_cli.socket.getaddrinfo", return_value=[(None, None, None, None, ("10.0.0.7", 443))]),
+            patch(
+                "backend.snapshot.git_cli.socket.getaddrinfo",
+                return_value=[(None, None, None, None, ("10.0.0.7", 443))],
+            ),
             patch("backend.snapshot.git_cli.subprocess.Popen") as popen_mock,
+            self.assertRaisesRegex(SnapshotBuildError, "private or local"),
         ):
-            with self.assertRaisesRegex(SnapshotBuildError, "private or local"):
-                runner.clone_mirror(
-                    "https://github.com/example/project.git",
-                    Path("repo.git"),
-                    timeout_seconds=30,
-                )
+            runner.clone_mirror(
+                "https://github.com/example/project.git",
+                Path("repo.git"),
+                timeout_seconds=30,
+            )
 
         popen_mock.assert_not_called()
 
     def test_run_allows_windows_drive_paths_for_local_git_arguments(self) -> None:
         runner = GitCommandRunner()
 
-        with patch("backend.snapshot.git_cli.subprocess.Popen", return_value=FakeProcess(stdout=[b"ok\n"])) as popen_mock:
+        with patch(
+            "backend.snapshot.git_cli.subprocess.Popen", return_value=FakeProcess(stdout=[b"ok\n"])
+        ) as popen_mock:
             output = runner.run(["-C", "D:\\Development\\deepdive\\repo.git", "rev-parse", "HEAD"], timeout_seconds=30)
 
         self.assertEqual(output, "ok\n")
@@ -176,15 +203,19 @@ class GitCommandRunnerTest(unittest.TestCase):
     def test_git_error_message_redacts_credentials_and_tokens(self) -> None:
         runner = GitCommandRunner()
 
-        with patch(
-            "backend.snapshot.git_cli.subprocess.Popen",
-            return_value=FakeProcess(
-                stderr=[b"fatal: Authentication failed for 'https://user:secret-token@github.com/example/private.git'\n"],
-                returncode=128,
+        with (
+            patch(
+                "backend.snapshot.git_cli.subprocess.Popen",
+                return_value=FakeProcess(
+                    stderr=[
+                        b"fatal: Authentication failed for 'https://user:secret-token@github.com/example/private.git'\n"
+                    ],
+                    returncode=128,
+                ),
             ),
+            self.assertRaises(SnapshotBuildError) as raised,
         ):
-            with self.assertRaises(SnapshotBuildError) as raised:
-                runner.run(["clone", "https://github.com/example/private.git", "repo.git"], timeout_seconds=30)
+            runner.run(["clone", "https://github.com/example/private.git", "repo.git"], timeout_seconds=30)
 
         message = raised.exception.message
         self.assertNotIn("secret-token", message)
@@ -211,27 +242,33 @@ class GitCommandRunnerTest(unittest.TestCase):
 
         self.assertEqual(len(calls), 3)
         self.assertEqual(calls[0][-5:], ["-C", "repo.git", "update-ref", "refs/deepdive/snapshot", "b" * 40])
-        self.assertEqual(calls[1][-6:], ["-C", "repo.git", "bundle", "create", "snapshot.bundle", "refs/deepdive/snapshot"])
+        self.assertEqual(
+            calls[1][-6:], ["-C", "repo.git", "bundle", "create", "snapshot.bundle", "refs/deepdive/snapshot"]
+        )
         self.assertEqual(calls[2][-5:], ["-C", "repo.git", "update-ref", "-d", "refs/deepdive/snapshot"])
 
     def test_git_error_message_is_bounded_even_when_stderr_is_large(self) -> None:
         runner = GitCommandRunner(max_output_bytes=1024)
 
-        with patch(
-            "backend.snapshot.git_cli.subprocess.Popen",
-            return_value=FakeProcess(stderr=[("fatal: " + ("x" * 20000)).encode()], returncode=128),
+        with (
+            patch(
+                "backend.snapshot.git_cli.subprocess.Popen",
+                return_value=FakeProcess(stderr=[("fatal: " + ("x" * 20000)).encode()], returncode=128),
+            ),
+            self.assertRaises(SnapshotBuildError) as raised,
         ):
-            with self.assertRaises(SnapshotBuildError) as raised:
-                runner.run(["clone", "https://github.com/example/project.git", "repo.git"], timeout_seconds=30)
+            runner.run(["clone", "https://github.com/example/project.git", "repo.git"], timeout_seconds=30)
 
         self.assertLessEqual(len(raised.exception.message), 1200)
 
     def test_git_stdout_is_bounded_for_large_outputs(self) -> None:
         runner = GitCommandRunner(max_output_bytes=8)
 
-        with patch("backend.snapshot.git_cli.subprocess.Popen", return_value=FakeLargeStdoutProcess()):
-            with self.assertRaises(SnapshotBuildError) as raised:
-                runner.run(["ls-tree"], timeout_seconds=30)
+        with (
+            patch("backend.snapshot.git_cli.subprocess.Popen", return_value=FakeLargeStdoutProcess()),
+            self.assertRaises(SnapshotBuildError) as raised,
+        ):
+            runner.run(["ls-tree"], timeout_seconds=30)
 
         self.assertEqual(raised.exception.code, "GitOutputTooLarge")
 
@@ -271,9 +308,9 @@ class GitCommandRunnerTest(unittest.TestCase):
         with (
             patch("backend.snapshot.git_cli.subprocess.Popen", return_value=process) as popen_mock,
             patch("backend.snapshot.git_cli._kill_process_tree") as kill_mock,
+            self.assertRaisesRegex(SnapshotBuildError, "timed out"),
         ):
-            with self.assertRaisesRegex(SnapshotBuildError, "timed out"):
-                runner.run(["ls-remote", "https://github.com/example/project.git"], timeout_seconds=1)
+            runner.run(["ls-remote", "https://github.com/example/project.git"], timeout_seconds=1)
 
         popen_kwargs = popen_mock.call_args.kwargs
         self.assertTrue(popen_kwargs.get("start_new_session") or popen_kwargs.get("creationflags"))

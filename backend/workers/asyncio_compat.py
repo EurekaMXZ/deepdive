@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Coroutine
 import selectors
 import sys
+from collections.abc import Coroutine
 from typing import Any
 
 

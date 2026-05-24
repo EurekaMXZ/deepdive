@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from backend.config import SnapshotConfig
+from backend.db.connections import AsyncConnectionProvider
 from backend.events import EventEnvelope, EventType
 from backend.snapshot import SnapshotBuilder
 from backend.snapshot.service import SnapshotService
@@ -11,7 +12,7 @@ class SnapshotCommandHandler:
     def __init__(
         self,
         *,
-        database,
+        database: AsyncConnectionProvider,
         builder: SnapshotBuilder | None = None,
         storage: ObjectStorage | None = None,
         snapshot_config: SnapshotConfig | None = None,

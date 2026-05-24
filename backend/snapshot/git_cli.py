@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import ipaddress
-from pathlib import Path
 import os
 import re
-import socket
 import signal
+import socket
 import subprocess
 import tempfile
 import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from backend.snapshot.models import SnapshotBuildError
-
 
 DEFAULT_ALLOWED_REPOSITORY_HOSTS = frozenset({"github.com", "www.github.com"})
 
@@ -27,6 +27,29 @@ class GitTreeEntry:
     path: str
 
 
+class ReadablePipe(Protocol):
+    closed: bool
+
+    def read1(self, size: int) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
+class GitProcess(Protocol):
+    stdout: ReadablePipe | None
+    stderr: ReadablePipe | None
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+    def poll(self) -> int | None: ...
+
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
+
+    def send_signal(self, sig: signal.Signals | int) -> None: ...
+
+
 @dataclass(frozen=True)
 class GitCommandRunner:
     max_output_bytes: int = 262_144
@@ -38,10 +61,14 @@ class GitCommandRunner:
         self.run(["clone", "--mirror", repository_url, str(mirror_path)], timeout_seconds=timeout_seconds)
 
     def resolve_commit(self, mirror_path: Path, ref: str, *, timeout_seconds: int) -> str:
-        return self.run(["-C", str(mirror_path), "rev-parse", f"{ref}^{{commit}}"], timeout_seconds=timeout_seconds).strip()
+        return self.run(
+            ["-C", str(mirror_path), "rev-parse", f"{ref}^{{commit}}"], timeout_seconds=timeout_seconds
+        ).strip()
 
     def resolve_tree(self, mirror_path: Path, commit_sha: str, *, timeout_seconds: int) -> str:
-        return self.run(["-C", str(mirror_path), "rev-parse", f"{commit_sha}^{{tree}}"], timeout_seconds=timeout_seconds).strip()
+        return self.run(
+            ["-C", str(mirror_path), "rev-parse", f"{commit_sha}^{{tree}}"], timeout_seconds=timeout_seconds
+        ).strip()
 
     def list_tree(self, mirror_path: Path, commit_sha: str, *, timeout_seconds: int) -> list[GitTreeEntry]:
         output = self.run(
@@ -83,7 +110,9 @@ class GitCommandRunner:
             timeout_seconds=timeout_seconds,
         )
 
-    def cat_file_blob(self, mirror_path: Path, oid: str, *, timeout_seconds: int, max_output_bytes: int | None = None) -> bytes:
+    def cat_file_blob(
+        self, mirror_path: Path, oid: str, *, timeout_seconds: int, max_output_bytes: int | None = None
+    ) -> bytes:
         return self.run_bytes(
             ["-C", str(mirror_path), "cat-file", "blob", oid],
             timeout_seconds=timeout_seconds,
@@ -91,28 +120,41 @@ class GitCommandRunner:
         )
 
     def run(self, args: list[str], *, timeout_seconds: int, max_output_bytes: int | None = None) -> str:
-        return self.run_bytes(args, timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes).decode("utf-8", errors="replace")
+        return self.run_bytes(args, timeout_seconds=timeout_seconds, max_output_bytes=max_output_bytes).decode(
+            "utf-8", errors="replace"
+        )
 
     def run_bytes(self, args: list[str], *, timeout_seconds: int, max_output_bytes: int | None = None) -> bytes:
         _reject_url_credentials(args, allowed_hosts=self.allowed_repository_hosts)
         output_limit = max_output_bytes if max_output_bytes is not None else self.max_output_bytes
         with tempfile.TemporaryDirectory(prefix="deepdive-git-home-") as git_home:
-            process = subprocess.Popen(
-                _git_command(args),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=_git_env(git_home),
-                **_process_group_kwargs(),
-            )
+            command = _git_command(args)
+            env = _git_env(git_home)
+            if os.name == "nt":
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                    start_new_session=True,
+                )
             return _run_git_process(
-                process,
+                cast(GitProcess, process),
                 timeout_seconds=timeout_seconds,
                 stdout_limit=output_limit,
                 stderr_limit=self.max_output_bytes,
             )
 
 
-def _run_git_process(process, *, timeout_seconds: int, stdout_limit: int, stderr_limit: int) -> bytes:
+def _run_git_process(process: GitProcess, *, timeout_seconds: int, stdout_limit: int, stderr_limit: int) -> bytes:
     stdout_buffer = bytearray()
     stderr_buffer = bytearray()
     output_too_large = False
@@ -202,7 +244,6 @@ def _git_env(git_home: str) -> dict[str, str]:
     env = {
         "PATH": os.environ.get("PATH", ""),
         "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
-        "SystemRoot": os.environ.get("SystemRoot", ""),
         "WINDIR": os.environ.get("WINDIR", ""),
         "HOME": git_home,
         "USERPROFILE": git_home,
@@ -216,29 +257,23 @@ def _git_env(git_home: str) -> dict[str, str]:
     for key in passthrough_keys:
         if key in os.environ:
             env[key] = os.environ[key]
-    return {key: value for key, value in env.items() if value is not None}
+    return env
 
 
 def _sanitize_git_error(message: str, *, max_output_bytes: int = 4096) -> str:
-    message = _redact_url_credentials(message.strip())[:max(1, max_output_bytes)]
+    message = _redact_url_credentials(message.strip())[: max(1, max_output_bytes)]
     return message.replace("\r", " ").replace("\n", " ")
 
 
-def _join_and_close(process, stdout_thread: threading.Thread, stderr_thread: threading.Thread) -> None:
+def _join_and_close(process: GitProcess, stdout_thread: threading.Thread, stderr_thread: threading.Thread) -> None:
     stdout_thread.join(timeout=1)
     stderr_thread.join(timeout=1)
     for pipe in (process.stdout, process.stderr):
-        if pipe is not None and not getattr(pipe, "closed", False):
+        if pipe is not None and not pipe.closed:
             pipe.close()
 
 
-def _process_group_kwargs() -> dict:
-    if os.name == "nt":
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-    return {"start_new_session": True}
-
-
-def _kill_process_tree(process) -> None:
+def _kill_process_tree(process: GitProcess) -> None:
     if os.name == "nt":
         try:
             process.send_signal(signal.CTRL_BREAK_EVENT)
@@ -250,7 +285,7 @@ def _kill_process_tree(process) -> None:
             process.kill()
         return
     try:
-        os.killpg(process.pid, signal.SIGKILL)
+        os.killpg(cast(subprocess.Popen[bytes], process).pid, signal.SIGKILL)
     except Exception:
         if process.poll() is None:
             process.kill()
@@ -265,7 +300,11 @@ def _reject_url_credentials(args: list[str], *, allowed_hosts: frozenset[str]) -
 
 def _has_url_credentials(value: str) -> bool:
     parsed = urlsplit(value)
-    return _is_url_like(value, parsed.scheme) and parsed.scheme in {"http", "https", "ssh", "git"} and bool(parsed.username or parsed.password)
+    return (
+        _is_url_like(value, parsed.scheme)
+        and parsed.scheme in {"http", "https", "ssh", "git"}
+        and bool(parsed.username or parsed.password)
+    )
 
 
 def _reject_unsafe_repository_url(value: str, *, allowed_hosts: frozenset[str], require_url: bool = False) -> None:
@@ -277,7 +316,9 @@ def _reject_unsafe_repository_url(value: str, *, allowed_hosts: frozenset[str], 
     if parsed.scheme != "https":
         raise SnapshotBuildError("RepositoryUrlSchemeNotAllowed", "repository URL must use HTTPS")
     if parsed.query or parsed.fragment:
-        raise SnapshotBuildError("RepositoryUrlQueryOrFragmentNotAllowed", "repository URL query or fragment is not allowed")
+        raise SnapshotBuildError(
+            "RepositoryUrlQueryOrFragmentNotAllowed", "repository URL query or fragment is not allowed"
+        )
     host = parsed.hostname
     if not host:
         raise SnapshotBuildError("RepositoryUrlHostInvalid", "repository URL host is required")
@@ -286,9 +327,9 @@ def _reject_unsafe_repository_url(value: str, *, allowed_hosts: frozenset[str], 
         raise SnapshotBuildError("RepositoryUrlPrivateOrLocal", "repository URL private or local hosts are not allowed")
     try:
         address = ipaddress.ip_address(host)
-    except ValueError:
+    except ValueError as exc:
         if allowed_hosts and host not in allowed_hosts:
-            raise SnapshotBuildError("RepositoryUrlHostNotAllowed", "repository URL host is not allowed")
+            raise SnapshotBuildError("RepositoryUrlHostNotAllowed", "repository URL host is not allowed") from exc
         _reject_private_resolved_addresses(host)
         return
     if _is_private_or_local_address(address):
@@ -311,7 +352,9 @@ def _reject_private_resolved_addresses(host: str) -> None:
         except ValueError:
             continue
         if _is_private_or_local_address(address):
-            raise SnapshotBuildError("RepositoryUrlPrivateOrLocal", "repository URL private or local hosts are not allowed")
+            raise SnapshotBuildError(
+                "RepositoryUrlPrivateOrLocal", "repository URL private or local hosts are not allowed"
+            )
 
 
 def _is_private_or_local_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

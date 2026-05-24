@@ -6,8 +6,7 @@ from backend.events import EventEnvelope, event_key, event_topic
 
 
 class KafkaProducerClient(Protocol):
-    async def send_and_wait(self, topic: str, *, key: bytes, value: bytes) -> object:
-        ...
+    async def send_and_wait(self, topic: str, *, key: bytes, value: bytes) -> object: ...
 
 
 class EventPublisher:

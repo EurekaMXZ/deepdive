@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import hashlib
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
+from datetime import UTC, datetime
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 from sqlalchemy import bindparam, text
@@ -10,10 +13,15 @@ from sqlalchemy.dialects.postgresql import JSONB
 from backend.api.pagination import decode_list_cursor
 from backend.api.records import AgentStreamEventRecord, AnalysisRecord
 from backend.config import DEFAULT_CONFIG_VERSION, AppConfig, create_config_snapshot
+from backend.db.connections import AsyncDbConnection
 from backend.events import EventEnvelope, EventType
 from backend.events.repositories import DbOutboxSink
 from backend.execution.tool_registry import DEFAULT_TOOL_REGISTRY_VERSION
 from backend.ids import new_uuid7
+
+
+class AnalysisDatabase(Protocol):
+    def begin(self) -> AbstractAsyncContextManager[AsyncDbConnection]: ...
 
 
 class PostgresAnalysisService:
@@ -21,7 +29,7 @@ class PostgresAnalysisService:
 
     def __init__(
         self,
-        database,
+        database: AnalysisDatabase,
         *,
         config: AppConfig | None = None,
         config_version: str = DEFAULT_CONFIG_VERSION,
@@ -203,14 +211,14 @@ class PostgresAnalysisService:
         limit: int = 50,
         cursor: str | None = None,
     ) -> list[AnalysisRecord]:
-        params = {
+        params: dict[str, str | datetime | UUID | int | None] = {
             "status": status,
             "repository_url_hash": repository_url_hash,
             "created_after": created_after,
             "created_before": created_before,
             "limit": limit + 1,
         }
-        clauses = []
+        clauses: list[str] = []
         if status is not None:
             clauses.append("a.status = :status")
         if repository_url_hash is not None:
@@ -339,9 +347,9 @@ class PostgresAnalysisService:
             )
             return [
                 AgentStreamEventRecord(
-                    seq=row["seq"],
-                    event_type=row["event_type"],
-                    payload_json=row["payload_json"],
+                    seq=int(row["seq"]),
+                    event_type=str(row["event_type"]),
+                    payload_json=_mapping_to_dict(row["payload_json"]),
                 )
                 for row in result.mappings().all()
             ]
@@ -359,7 +367,7 @@ class PostgresAnalysisService:
                 {"analysis_id": analysis_id},
             )
             row = result.mappings().first()
-            return row["status"] if row is not None else None
+            return str(row["status"]) if row is not None else None
 
     def _goal_ref(self) -> str:
         profile = self._config.analysis.profiles[self._config.analysis.default_profile]
@@ -389,7 +397,7 @@ class PostgresAnalysisService:
         }
 
 
-async def _fetch_analysis_record(connection, analysis_id: UUID) -> AnalysisRecord | None:
+async def _fetch_analysis_record(connection: AsyncDbConnection, analysis_id: UUID) -> AnalysisRecord | None:
     result = await connection.execute(
         text(
             """
@@ -417,21 +425,25 @@ async def _fetch_analysis_record(connection, analysis_id: UUID) -> AnalysisRecor
     return _record_from_row(row) if row is not None else None
 
 
-def _record_from_row(row) -> AnalysisRecord:
+def _record_from_row(row: Mapping[Any, Any]) -> AnalysisRecord:
     return AnalysisRecord(
-        analysis_id=row["analysis_id"],
-        agent_id=row["agent_id"],
-        snapshot_id=row["snapshot_id"],
-        status=row["status"],
-        repository_url=row["repository_url"],
-        requested_ref=row["requested_ref"],
-        resolved_commit_sha=row["resolved_commit_sha"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-        error_code=row.get("error_code"),
-        error_message=row.get("error_message"),
+        analysis_id=cast(UUID, row["analysis_id"]),
+        agent_id=cast(UUID, row["agent_id"]),
+        snapshot_id=cast(UUID | None, row["snapshot_id"]),
+        status=str(row["status"]),
+        repository_url=str(row["repository_url"]),
+        requested_ref=str(row["requested_ref"]),
+        resolved_commit_sha=cast(str | None, row["resolved_commit_sha"]),
+        created_at=cast(datetime, row["created_at"]),
+        updated_at=cast(datetime, row["updated_at"]),
+        error_code=cast(str | None, row.get("error_code")),
+        error_message=cast(str | None, row.get("error_message")),
     )
 
 
 def _sha256_text(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+
+
+def _mapping_to_dict(value: Any) -> dict[str, Any]:
+    return dict(cast(Mapping[str, Any], value)) if isinstance(value, Mapping) else {}

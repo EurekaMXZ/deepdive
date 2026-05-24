@@ -6,10 +6,9 @@ import os
 from dataclasses import asdict, dataclass, field
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from backend.ids import new_uuid7
-
 
 DEFAULT_ENV_FILE_NAME = ".env"
 ENV_FILE_ENV_VAR = "DEEPDIVE_ENV_FILE"
@@ -132,7 +131,7 @@ class AppConfig:
     cache: CacheConfig = field(default_factory=CacheConfig)
 
     @classmethod
-    def default(cls) -> "AppConfig":
+    def default(cls) -> AppConfig:
         return cls()
 
     def to_json_dict(self) -> dict[str, Any]:
@@ -175,9 +174,8 @@ def load_app_config_from_env() -> AppConfig:
             "ANALYSIS_AUTO_COMPACT_THRESHOLD_TOKENS",
             default_profile_config.auto_compact_threshold_tokens,
         ),
-        goal=os.environ.get("ANALYSIS_GOAL") or _read_optional_text_file(
-            os.environ.get("ANALYSIS_GOAL_FILE", default_profile_config.goal_file)
-        ),
+        goal=os.environ.get("ANALYSIS_GOAL")
+        or _read_optional_text_file(os.environ.get("ANALYSIS_GOAL_FILE", default_profile_config.goal_file)),
     )
     web_search = _validate_web_search_config(
         WebSearchToolConfig(
@@ -188,8 +186,12 @@ def load_app_config_from_env() -> AppConfig:
     )
     openai_web_search = _validate_openai_web_search_config(
         OpenAIWebSearchToolConfig(
-            enabled=_bool_env(os.environ.get("OPENAI_WEB_SEARCH_ENABLED", str(default.tools.openai_web_search.enabled))),
-            search_context_size=os.environ.get("OPENAI_WEB_SEARCH_CONTEXT_SIZE", default.tools.openai_web_search.search_context_size),
+            enabled=_bool_env(
+                os.environ.get("OPENAI_WEB_SEARCH_ENABLED", str(default.tools.openai_web_search.enabled))
+            ),
+            search_context_size=os.environ.get(
+                "OPENAI_WEB_SEARCH_CONTEXT_SIZE", default.tools.openai_web_search.search_context_size
+            ),
             external_web_access=_bool_env(
                 os.environ.get(
                     "OPENAI_WEB_SEARCH_EXTERNAL_WEB_ACCESS",
@@ -197,10 +199,16 @@ def load_app_config_from_env() -> AppConfig:
                 )
             ),
             include_sources=_bool_env(
-                os.environ.get("OPENAI_WEB_SEARCH_INCLUDE_SOURCES", str(default.tools.openai_web_search.include_sources))
+                os.environ.get(
+                    "OPENAI_WEB_SEARCH_INCLUDE_SOURCES", str(default.tools.openai_web_search.include_sources)
+                )
             ),
-            allowed_domains=_csv_env("OPENAI_WEB_SEARCH_ALLOWED_DOMAINS", default.tools.openai_web_search.allowed_domains),
-            blocked_domains=_csv_env("OPENAI_WEB_SEARCH_BLOCKED_DOMAINS", default.tools.openai_web_search.blocked_domains),
+            allowed_domains=_csv_env(
+                "OPENAI_WEB_SEARCH_ALLOWED_DOMAINS", default.tools.openai_web_search.allowed_domains
+            ),
+            blocked_domains=_csv_env(
+                "OPENAI_WEB_SEARCH_BLOCKED_DOMAINS", default.tools.openai_web_search.blocked_domains
+            ),
             return_token_budget=_optional_env("OPENAI_WEB_SEARCH_RETURN_TOKEN_BUDGET"),
         )
     )
@@ -212,23 +220,34 @@ def load_app_config_from_env() -> AppConfig:
             reasoning_summary=os.environ.get("OPENAI_REASONING_SUMMARY", default.openai.reasoning_summary),
             service_tier=os.environ.get("OPENAI_SERVICE_TIER", default.openai.service_tier),
             parallel_tool_calls=False,
-            use_previous_response_id=_bool_env(os.environ.get("OPENAI_USE_PREVIOUS_RESPONSE_ID", str(default.openai.use_previous_response_id))),
+            use_previous_response_id=_bool_env(
+                os.environ.get("OPENAI_USE_PREVIOUS_RESPONSE_ID", str(default.openai.use_previous_response_id))
+            ),
             transport=os.environ.get("OPENAI_TRANSPORT", default.openai.transport),
             show_reasoning_summary=_bool_env(
                 os.environ.get("API_SHOW_MODEL_REASONING_SUMMARY", str(default.openai.show_reasoning_summary))
             ),
         ),
         prompt=PromptConfig(
-            system_instruction_file=os.environ.get("PROMPT_SYSTEM_INSTRUCTION_FILE", default.prompt.system_instruction_file),
-            developer_instruction_file=os.environ.get("PROMPT_DEVELOPER_INSTRUCTION_FILE", default.prompt.developer_instruction_file),
-            compaction_instruction_file=os.environ.get("PROMPT_COMPACTION_INSTRUCTION_FILE", default.prompt.compaction_instruction_file),
-            system_instruction=os.environ.get("PROMPT_SYSTEM_INSTRUCTION") or _read_optional_text_file(
+            system_instruction_file=os.environ.get(
+                "PROMPT_SYSTEM_INSTRUCTION_FILE", default.prompt.system_instruction_file
+            ),
+            developer_instruction_file=os.environ.get(
+                "PROMPT_DEVELOPER_INSTRUCTION_FILE", default.prompt.developer_instruction_file
+            ),
+            compaction_instruction_file=os.environ.get(
+                "PROMPT_COMPACTION_INSTRUCTION_FILE", default.prompt.compaction_instruction_file
+            ),
+            system_instruction=os.environ.get("PROMPT_SYSTEM_INSTRUCTION")
+            or _read_optional_text_file(
                 os.environ.get("PROMPT_SYSTEM_INSTRUCTION_FILE", default.prompt.system_instruction_file)
             ),
-            developer_instruction=os.environ.get("PROMPT_DEVELOPER_INSTRUCTION") or _read_optional_text_file(
+            developer_instruction=os.environ.get("PROMPT_DEVELOPER_INSTRUCTION")
+            or _read_optional_text_file(
                 os.environ.get("PROMPT_DEVELOPER_INSTRUCTION_FILE", default.prompt.developer_instruction_file)
             ),
-            compaction_instruction=os.environ.get("PROMPT_COMPACTION_INSTRUCTION") or _read_optional_text_file(
+            compaction_instruction=os.environ.get("PROMPT_COMPACTION_INSTRUCTION")
+            or _read_optional_text_file(
                 os.environ.get("PROMPT_COMPACTION_INSTRUCTION_FILE", default.prompt.compaction_instruction_file)
             ),
         ),
@@ -246,7 +265,9 @@ def load_app_config_from_env() -> AppConfig:
             search_text=SearchTextToolConfig(
                 max_results=_int_env("TOOL_SEARCH_TEXT_MAX_RESULTS", default.tools.search_text.max_results),
                 timeout_seconds=_int_env("TOOL_SEARCH_TEXT_TIMEOUT_SECONDS", default.tools.search_text.timeout_seconds),
-                max_output_bytes=_int_env("TOOL_SEARCH_TEXT_MAX_OUTPUT_BYTES", default.tools.search_text.max_output_bytes),
+                max_output_bytes=_int_env(
+                    "TOOL_SEARCH_TEXT_MAX_OUTPUT_BYTES", default.tools.search_text.max_output_bytes
+                ),
             ),
             web_search=web_search,
             openai_web_search=openai_web_search,
@@ -344,9 +365,11 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
     default_profile = str(analysis_json.get("default_profile") or default.analysis.default_profile)
     profile_defaults = default.analysis.profiles[default.analysis.default_profile]
     profiles_json = analysis_json.get("profiles")
-    selected_profile_json = {}
+    selected_profile_json: dict[str, Any] = {}
     if isinstance(profiles_json, dict):
-        selected_profile_json = profiles_json.get(default_profile) if isinstance(profiles_json.get(default_profile), dict) else {}
+        profiles_json = cast(dict[str, Any], profiles_json)
+        profile_value = profiles_json.get(default_profile)
+        selected_profile_json = cast(dict[str, Any], profile_value) if isinstance(profile_value, dict) else {}
 
     profile_config = AnalysisProfileConfig(
         goal_file=str(selected_profile_json.get("goal_file") or profile_defaults.goal_file),
@@ -367,8 +390,12 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
     web_search = _validate_web_search_config(
         WebSearchToolConfig(
             max_results=_int_value(web_search_json.get("max_results"), default.tools.web_search.max_results),
-            timeout_seconds=_int_value(web_search_json.get("timeout_seconds"), default.tools.web_search.timeout_seconds),
-            max_query_chars=_int_value(web_search_json.get("max_query_chars"), default.tools.web_search.max_query_chars),
+            timeout_seconds=_int_value(
+                web_search_json.get("timeout_seconds"), default.tools.web_search.timeout_seconds
+            ),
+            max_query_chars=_int_value(
+                web_search_json.get("max_query_chars"), default.tools.web_search.max_query_chars
+            ),
         )
     )
     openai_web_search = _validate_openai_web_search_config(
@@ -381,7 +408,9 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
                 openai_web_search_json.get("external_web_access"),
                 default.tools.openai_web_search.external_web_access,
             ),
-            include_sources=_bool_value(openai_web_search_json.get("include_sources"), default.tools.openai_web_search.include_sources),
+            include_sources=_bool_value(
+                openai_web_search_json.get("include_sources"), default.tools.openai_web_search.include_sources
+            ),
             allowed_domains=_tuple_value(
                 openai_web_search_json.get("allowed_domains"),
                 default.tools.openai_web_search.allowed_domains,
@@ -401,7 +430,9 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
             reasoning_summary=str(openai_json.get("reasoning_summary") or default.openai.reasoning_summary),
             service_tier=str(openai_json.get("service_tier") or default.openai.service_tier),
             parallel_tool_calls=False,
-            use_previous_response_id=_bool_value(openai_json.get("use_previous_response_id"), default.openai.use_previous_response_id),
+            use_previous_response_id=_bool_value(
+                openai_json.get("use_previous_response_id"), default.openai.use_previous_response_id
+            ),
             transport=str(openai_json.get("transport") or default.openai.transport),
             show_reasoning_summary=_bool_value(
                 openai_json.get("show_reasoning_summary"),
@@ -409,9 +440,15 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
             ),
         ),
         prompt=PromptConfig(
-            system_instruction_file=str(prompt_json.get("system_instruction_file") or default.prompt.system_instruction_file),
-            developer_instruction_file=str(prompt_json.get("developer_instruction_file") or default.prompt.developer_instruction_file),
-            compaction_instruction_file=str(prompt_json.get("compaction_instruction_file") or default.prompt.compaction_instruction_file),
+            system_instruction_file=str(
+                prompt_json.get("system_instruction_file") or default.prompt.system_instruction_file
+            ),
+            developer_instruction_file=str(
+                prompt_json.get("developer_instruction_file") or default.prompt.developer_instruction_file
+            ),
+            compaction_instruction_file=str(
+                prompt_json.get("compaction_instruction_file") or default.prompt.compaction_instruction_file
+            ),
             system_instruction=_optional_str(prompt_json.get("system_instruction")),
             developer_instruction=_optional_str(prompt_json.get("developer_instruction")),
             compaction_instruction=_optional_str(prompt_json.get("compaction_instruction")),
@@ -429,37 +466,47 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
             ),
             search_text=SearchTextToolConfig(
                 max_results=_int_value(search_text_json.get("max_results"), default.tools.search_text.max_results),
-                timeout_seconds=_int_value(search_text_json.get("timeout_seconds"), default.tools.search_text.timeout_seconds),
-                max_output_bytes=_int_value(search_text_json.get("max_output_bytes"), default.tools.search_text.max_output_bytes),
+                timeout_seconds=_int_value(
+                    search_text_json.get("timeout_seconds"), default.tools.search_text.timeout_seconds
+                ),
+                max_output_bytes=_int_value(
+                    search_text_json.get("max_output_bytes"), default.tools.search_text.max_output_bytes
+                ),
             ),
             web_search=web_search,
             openai_web_search=openai_web_search,
         ),
         snapshot=SnapshotConfig(
             max_file_bytes=_int_value(snapshot_json.get("max_file_bytes"), default.snapshot.max_file_bytes),
-            max_git_bundle_bytes=_int_value(snapshot_json.get("max_git_bundle_bytes"), default.snapshot.max_git_bundle_bytes),
+            max_git_bundle_bytes=_int_value(
+                snapshot_json.get("max_git_bundle_bytes"), default.snapshot.max_git_bundle_bytes
+            ),
             lfs_policy=str(snapshot_json.get("lfs_policy") or default.snapshot.lfs_policy),
             submodule_policy=str(snapshot_json.get("submodule_policy") or default.snapshot.submodule_policy),
             binary_policy=str(snapshot_json.get("binary_policy") or default.snapshot.binary_policy),
         ),
         cache=CacheConfig(
             root_dir=str(cache_json.get("root_dir") or default.cache.root_dir),
-            max_worker_cache_bytes=_int_value(cache_json.get("max_worker_cache_bytes"), default.cache.max_worker_cache_bytes),
+            max_worker_cache_bytes=_int_value(
+                cache_json.get("max_worker_cache_bytes"), default.cache.max_worker_cache_bytes
+            ),
             max_prefix_bytes=_int_value(cache_json.get("max_prefix_bytes"), default.cache.max_prefix_bytes),
             ttl_days=_int_value(cache_json.get("ttl_days"), default.cache.ttl_days),
-            min_free_disk_percent=_int_value(cache_json.get("min_free_disk_percent"), default.cache.min_free_disk_percent),
+            min_free_disk_percent=_int_value(
+                cache_json.get("min_free_disk_percent"), default.cache.min_free_disk_percent
+            ),
         ),
     )
 
 
 def _section(config_json: dict[str, Any], name: str) -> dict[str, Any]:
     value = config_json.get(name)
-    return value if isinstance(value, dict) else {}
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
 def _nested_section(parent: dict[str, Any], name: str) -> dict[str, Any]:
     value = parent.get(name)
-    return value if isinstance(value, dict) else {}
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
 def _int_value(value: Any, default: int) -> int:
@@ -481,8 +528,12 @@ def _tuple_value(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
         return default
     if isinstance(value, str):
         return tuple(item.strip() for item in value.split(",") if item.strip()) or default
-    if isinstance(value, (list, tuple)):
-        return tuple(str(item).strip() for item in value if str(item).strip()) or default
+    if isinstance(value, list):
+        items = cast(list[Any], value)
+        return tuple(str(item).strip() for item in items if str(item).strip()) or default
+    if isinstance(value, tuple):
+        items = cast(tuple[Any, ...], value)
+        return tuple(str(item).strip() for item in items if str(item).strip()) or default
     return default
 
 
@@ -549,7 +600,10 @@ def _is_openai_web_search_domain(domain: str) -> bool:
     labels = domain.split(".")
     if len(labels) < 2:
         return False
-    return all(label and label.replace("-", "").isalnum() and not label.startswith("-") and not label.endswith("-") for label in labels)
+    return all(
+        label and label.replace("-", "").isalnum() and not label.startswith("-") and not label.endswith("-")
+        for label in labels
+    )
 
 
 def create_config_snapshot(config: AppConfig, config_version: str = DEFAULT_CONFIG_VERSION) -> ConfigSnapshot:

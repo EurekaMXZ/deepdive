@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import Protocol
+from collections.abc import AsyncGenerator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncConnection as SqlAlchemyAsyncConnection
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-
-class AsyncTransactionFactory(Protocol):
-    def begin(self):
-        ...
+from backend.db.connections import AsyncDbConnection
 
 
 class Database:
@@ -19,12 +16,15 @@ class Database:
         self._engine = engine
 
     @asynccontextmanager
-    async def begin(self) -> AsyncIterator[SqlAlchemyAsyncConnection]:
+    async def begin(self) -> AsyncGenerator[AsyncDbConnection]:
         async with self._engine.begin() as connection:
-            yield connection
+            yield cast(AsyncDbConnection, connection)
 
     async def dispose(self) -> None:
         await self._engine.dispose()
+
+    def transaction(self) -> AbstractAsyncContextManager[SqlAlchemyAsyncConnection]:
+        return self._engine.begin()
 
 
 def create_database(database_url: str) -> Database:

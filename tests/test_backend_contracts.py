@@ -90,5 +90,6 @@ class EventContractsTest(unittest.TestCase):
 
         self.assertIn("SnapshotReady", {event_type.value for event_type in AGENT_INBOX_TOPICS})
 
+
 if __name__ == "__main__":
     unittest.main()

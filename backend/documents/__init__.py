@@ -3,17 +3,29 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from backend.ids import new_uuid7
 from backend.storage import ObjectStorage, document_content_key
 
 
+class DocumentStore(Protocol):
+    async def get_document(self, document_id: UUID) -> dict[str, Any] | None: ...
+
+    async def find_revision_by_tool_call(self, tool_call_id: UUID) -> dict[str, Any] | None: ...
+
+    async def add_document_with_revision(self, document: dict[str, Any], revision: dict[str, Any]) -> None: ...
+
+    async def update_document_with_revision(
+        self, document_id: UUID, updates: dict[str, Any], revision: dict[str, Any]
+    ) -> dict[str, Any] | None: ...
+
+
 @dataclass
 class DocumentRepository:
-    documents: dict[UUID, dict[str, Any]] = field(default_factory=dict)
-    revisions: list[dict[str, Any]] = field(default_factory=list)
+    documents: dict[UUID, dict[str, Any]] = field(default_factory=dict[UUID, dict[str, Any]])
+    revisions: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
     async def get_document(self, document_id: UUID) -> dict[str, Any] | None:
         document = self.documents.get(document_id)
@@ -29,7 +41,9 @@ class DocumentRepository:
         self.documents[document["id"]] = dict(document)
         self.revisions.append(dict(revision))
 
-    async def update_document_with_revision(self, document_id: UUID, updates: dict[str, Any], revision: dict[str, Any]) -> dict[str, Any] | None:
+    async def update_document_with_revision(
+        self, document_id: UUID, updates: dict[str, Any], revision: dict[str, Any]
+    ) -> dict[str, Any] | None:
         document = dict(self.documents[document_id])
         if "expected_version" in updates and int(document["current_version"]) != int(updates["expected_version"]):
             return None
@@ -43,7 +57,7 @@ class DocumentRepository:
 
 
 class DocumentService:
-    def __init__(self, *, repository: DocumentRepository, storage: ObjectStorage) -> None:
+    def __init__(self, *, repository: DocumentStore, storage: ObjectStorage) -> None:
         self._repository = repository
         self._storage = storage
 
@@ -83,7 +97,9 @@ class DocumentService:
             "updated_at": now,
             "finalized_at": None,
         }
-        revision = _revision(document_id, version, tool_call_id, "create", content_ref, content_hash, len(content_bytes), now)
+        revision = _revision(
+            document_id, version, tool_call_id, "create", content_ref, content_hash, len(content_bytes), now
+        )
         await self._repository.add_document_with_revision(document, revision)
         return _document_result(document)
 
@@ -129,13 +145,17 @@ class DocumentService:
             "updated_at": now,
             "finalized_at": None,
         }
-        revision = _revision(document_id, version, tool_call_id, "update", content_ref, content_hash, len(content_bytes), now)
+        revision = _revision(
+            document_id, version, tool_call_id, "update", content_ref, content_hash, len(content_bytes), now
+        )
         updated = await self._repository.update_document_with_revision(document_id, updates, revision)
         if updated is None:
             raise DocumentToolError("DOCUMENT_VERSION_CONFLICT", "Document version does not match expected_version.")
         return _document_result(updated)
 
-    async def delete(self, *, analysis_id: UUID, tool_call_id: UUID, document_id: UUID, expected_version: int) -> dict[str, Any]:
+    async def delete(
+        self, *, analysis_id: UUID, tool_call_id: UUID, document_id: UUID, expected_version: int
+    ) -> dict[str, Any]:
         replay = await self._replay_result(tool_call_id)
         if replay is not None:
             return replay

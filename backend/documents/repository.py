@@ -7,12 +7,12 @@ from uuid import UUID
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-from backend.db.connections import connection_from
+from backend.db.connections import AsyncDbConnection, ConnectionSource, connection_from
 from backend.ids import new_uuid7
 
 
 class PostgresDocumentRepository:
-    def __init__(self, connection_or_database) -> None:
+    def __init__(self, connection_or_database: ConnectionSource) -> None:
         self._connection_or_database = connection_or_database
 
     def _connection(self):
@@ -69,7 +69,9 @@ class PostgresDocumentRepository:
             )
             await self._insert_revision(connection, revision)
 
-    async def update_document_with_revision(self, document_id: UUID, updates: dict[str, Any], revision: dict[str, Any]) -> dict[str, Any] | None:
+    async def update_document_with_revision(
+        self, document_id: UUID, updates: dict[str, Any], revision: dict[str, Any]
+    ) -> dict[str, Any] | None:
         payload = dict(updates)
         expected_version = payload.pop("expected_version", None)
         expected_status = payload.pop("expected_status", None)
@@ -113,7 +115,7 @@ class PostgresDocumentRepository:
             await self._insert_revision(connection, revision)
         return dict(row)
 
-    async def _insert_revision(self, connection, revision: dict[str, Any]) -> None:
+    async def _insert_revision(self, connection: AsyncDbConnection, revision: dict[str, Any]) -> None:
         payload = dict(revision)
         payload.setdefault("id", new_uuid7())
         await connection.execute(

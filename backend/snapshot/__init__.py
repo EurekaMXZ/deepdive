@@ -3,10 +3,10 @@ from __future__ import annotations
 from backend.snapshot.builder import GitSnapshotBuilder
 from backend.snapshot.git_cli import GitCommandRunner, GitTreeEntry
 from backend.snapshot.models import (
+    SnapshotBuilder,
     SnapshotBuildError,
     SnapshotBuildRequest,
     SnapshotBuildResult,
-    SnapshotBuilder,
     SnapshotFileRecord,
     SnapshotInstructionRecord,
     SnapshotPolicy,

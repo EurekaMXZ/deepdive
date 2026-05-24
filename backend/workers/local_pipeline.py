@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from types import TracebackType
+from typing import Any
+from uuid import UUID
 
 from sqlalchemy import text
 
 from backend.agent import AgentCommandHandler, ContextAssembler
 from backend.agent.openai_runner import create_openai_responses_runner
 from backend.agent.repository import PostgresAgentRepository
+from backend.cache import LocalSourceCache
 from backend.config import load_app_config_from_env, load_dotenv_if_exists
-from backend.db.runtime import create_database
+from backend.db.connections import AsyncDbConnection, DbRow
+from backend.db.runtime import Database, create_database
 from backend.documents import DocumentService
 from backend.documents.repository import PostgresDocumentRepository
 from backend.events import EventEnvelope, EventType
@@ -17,11 +23,9 @@ from backend.execution import PermissionEngine, SourceToolExecutor
 from backend.execution.repository import PostgresSnapshotToolRepository, PostgresToolCallRepository
 from backend.snapshot.service import SnapshotService
 from backend.storage import DEFAULT_OBJECT_BUCKET, MinioObjectStorage
-from backend.cache import LocalSourceCache
 from backend.workers.analysis import AnalysisCommandHandler
 from backend.workers.asyncio_compat import run_async_worker
 from backend.workers.execution import ExecutionCommandHandler
-from backend.workers.snapshot_runtime import _bool_env
 
 
 @dataclass(frozen=True)
@@ -95,7 +99,7 @@ async def run_local_pipeline(settings: LocalPipelineSettings) -> int:
     return processed
 
 
-async def _fetch_next_outbox(connection):
+async def _fetch_next_outbox(connection: AsyncDbConnection) -> DbRow | None:
     result = await connection.execute(
         text(
             """
@@ -111,7 +115,7 @@ async def _fetch_next_outbox(connection):
     return result.mappings().first()
 
 
-async def _mark_outbox_published(connection, outbox_id) -> None:
+async def _mark_outbox_published(connection: AsyncDbConnection, outbox_id: UUID) -> None:
     await connection.execute(
         text("UPDATE outbox_events SET published_at = now() WHERE id = :id"),
         {"id": outbox_id},
@@ -128,16 +132,19 @@ def _is_agent_event(event: EventEnvelope) -> bool:
     }
 
 
-async def _dispatch_event(connection, event: EventEnvelope, *, storage: MinioObjectStorage, settings: LocalPipelineSettings) -> None:
+async def _dispatch_event(
+    connection: AsyncDbConnection, event: EventEnvelope, *, storage: MinioObjectStorage, settings: LocalPipelineSettings
+) -> None:
     if event.event_type in {EventType.ANALYSIS_REQUESTED, EventType.ANALYSIS_CANCEL_REQUESTED}:
         await AnalysisCommandHandler(connection)(event)
         return
     if event.event_type == EventType.SNAPSHOT_REQUESTED:
-        await SnapshotService(database=_SingleConnectionDatabase(connection), storage=storage).handle_snapshot_requested(event)
+        await SnapshotService(
+            database=_SingleConnectionDatabase(connection), storage=storage
+        ).handle_snapshot_requested(event)
         return
     if _is_agent_event(event):
         raise ValueError("Agent events must be dispatched outside the outbox transaction")
-        return
     if event.event_type == EventType.TOOL_CALL_REQUESTED:
         app_config = load_app_config_from_env()
         snapshot_repository = PostgresSnapshotToolRepository(connection)
@@ -160,7 +167,9 @@ async def _dispatch_event(connection, event: EventEnvelope, *, storage: MinioObj
         return
 
 
-async def _dispatch_agent_event(event: EventEnvelope, *, database, storage: MinioObjectStorage, settings: LocalPipelineSettings) -> None:
+async def _dispatch_agent_event(
+    event: EventEnvelope, *, database: Database, storage: MinioObjectStorage, settings: LocalPipelineSettings
+) -> None:
     repository = PostgresAgentRepository(database)
     await AgentCommandHandler(
         repository=repository,
@@ -170,7 +179,7 @@ async def _dispatch_agent_event(event: EventEnvelope, *, database, storage: Mini
     )(event)
 
 
-def _openai_runner(settings: LocalPipelineSettings):
+def _openai_runner(settings: LocalPipelineSettings) -> Any:
     return create_openai_responses_runner(
         transport=settings.openai_transport,
         api_key=settings.openai_api_key,
@@ -180,22 +189,31 @@ def _openai_runner(settings: LocalPipelineSettings):
 
 
 class _SingleConnectionDatabase:
-    def __init__(self, connection) -> None:
+    def __init__(self, connection: AsyncDbConnection) -> None:
         self._connection = connection
 
-    def begin(self):
+    def begin(self) -> AbstractAsyncContextManager[AsyncDbConnection]:
         return _SingleConnectionContext(self._connection)
 
 
 class _SingleConnectionContext:
-    def __init__(self, connection) -> None:
+    def __init__(self, connection: AsyncDbConnection) -> None:
         self._connection = connection
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> AsyncDbConnection:
         return self._connection
 
-    async def __aexit__(self, exc_type, exc, traceback) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         return None
+
+
+def _bool_env(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 async def main_async() -> None:

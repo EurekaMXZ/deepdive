@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from backend.events.types import EventType
 from backend.ids import new_uuid7
+
+
+def _empty_payload() -> dict[str, Any]:
+    return {}
 
 
 @dataclass(frozen=True)
@@ -22,7 +26,7 @@ class EventEnvelope:
     agent_id: UUID | None = None
     snapshot_id: UUID | None = None
     attempt: int = 1
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=_empty_payload)
 
     @classmethod
     def new(
@@ -35,7 +39,7 @@ class EventEnvelope:
         correlation_id: UUID | None = None,
         causation_id: UUID | None = None,
         payload: dict[str, Any] | None = None,
-    ) -> "EventEnvelope":
+    ) -> EventEnvelope:
         resolved_event_type = EventType(event_type)
         resolved_correlation_id = correlation_id or analysis_id or new_uuid7()
         return cls(
@@ -48,7 +52,7 @@ class EventEnvelope:
             analysis_id=analysis_id,
             agent_id=agent_id,
             snapshot_id=snapshot_id,
-            payload=payload or {},
+            payload={} if payload is None else dict(payload),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -66,24 +70,27 @@ class EventEnvelope:
             "payload": self.payload,
         }
 
-    def with_attempt(self, attempt: int) -> "EventEnvelope":
+    def with_attempt(self, attempt: int) -> EventEnvelope:
         return replace(self, attempt=attempt)
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), separators=(",", ":"), sort_keys=True)
 
     @classmethod
-    def from_json(cls, value: str) -> "EventEnvelope":
-        return cls.from_dict(json.loads(value))
+    def from_json(cls, value: str) -> EventEnvelope:
+        data = json.loads(value)
+        if not isinstance(data, dict):
+            raise ValueError("EventEnvelope JSON must decode to an object")
+        return cls.from_dict(cast(dict[str, Any], data))
 
     @classmethod
-    def from_json_value(cls, value: str | dict[str, Any]) -> "EventEnvelope":
+    def from_json_value(cls, value: str | dict[str, Any]) -> EventEnvelope:
         if isinstance(value, str):
             return cls.from_json(value)
         return cls.from_dict(value)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "EventEnvelope":
+    def from_dict(cls, data: dict[str, Any]) -> EventEnvelope:
         return cls(
             event_id=UUID(data["event_id"]),
             schema_version=data["schema_version"],
@@ -95,10 +102,9 @@ class EventEnvelope:
             agent_id=_optional_uuid(data.get("agent_id")),
             snapshot_id=_optional_uuid(data.get("snapshot_id")),
             attempt=data["attempt"],
-            payload=data["payload"],
+            payload=cast(dict[str, Any], data["payload"]) if isinstance(data["payload"], dict) else {},
         )
 
 
 def _optional_uuid(value: str | None) -> UUID | None:
     return UUID(value) if value else None
-

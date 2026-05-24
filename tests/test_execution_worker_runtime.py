@@ -8,7 +8,11 @@ from unittest.mock import patch
 from backend.events import EventEnvelope, EventType
 from backend.events.kafka import ConsumedKafkaMessage
 from backend.ids import new_uuid7
-from backend.workers.execution_runtime import ExecutionWorkerSettings, build_execution_command_topics, load_execution_worker_settings
+from backend.workers.execution_runtime import (
+    ExecutionWorkerSettings,
+    build_execution_command_topics,
+    load_execution_worker_settings,
+)
 
 
 class ExecutionWorkerRuntimeTest(unittest.TestCase):
@@ -100,7 +104,9 @@ class ExecutionWorkerRuntimeTest(unittest.TestCase):
             payload={"tool_call_id": str(new_uuid7())},
         )
         database = FakeDatabase()
-        consumer = FakeConsumer([ConsumedKafkaMessage(topic="deepdive.execution.commands", key=b"k", value=event.to_json().encode())])
+        consumer = FakeConsumer(
+            [ConsumedKafkaMessage(topic="deepdive.execution.commands", key=b"k", value=event.to_json().encode())]
+        )
 
         async def run_test() -> None:
             with (
@@ -159,7 +165,9 @@ class ExecutionWorkerRuntimeTest(unittest.TestCase):
             payload={"tool_call_id": str(new_uuid7())},
         )
         database = FakeDatabase()
-        consumer = FakeConsumer([ConsumedKafkaMessage(topic="deepdive.execution.commands", key=b"k", value=event.to_json().encode())])
+        consumer = FakeConsumer(
+            [ConsumedKafkaMessage(topic="deepdive.execution.commands", key=b"k", value=event.to_json().encode())]
+        )
 
         async def run_test() -> None:
             with (

@@ -18,9 +18,11 @@ class WorkerAsyncioCompatTest(unittest.TestCase):
             captured["loop_factory"] = loop_factory
             coro.close()
 
-        with patch("backend.workers.asyncio_compat.sys.platform", "win32"):
-            with patch("backend.workers.asyncio_compat.asyncio.run", side_effect=fake_run):
-                run_async_worker(noop())
+        with (
+            patch("backend.workers.asyncio_compat.sys.platform", "win32"),
+            patch("backend.workers.asyncio_compat.asyncio.run", side_effect=fake_run),
+        ):
+            run_async_worker(noop())
 
         self.assertIsNotNone(captured["loop_factory"])
         loop = captured["loop_factory"]()
@@ -39,9 +41,11 @@ class WorkerAsyncioCompatTest(unittest.TestCase):
             captured["kwargs"] = kwargs
             coro.close()
 
-        with patch("backend.workers.asyncio_compat.sys.platform", "linux"):
-            with patch("backend.workers.asyncio_compat.asyncio.run", side_effect=fake_run):
-                run_async_worker(noop())
+        with (
+            patch("backend.workers.asyncio_compat.sys.platform", "linux"),
+            patch("backend.workers.asyncio_compat.asyncio.run", side_effect=fake_run),
+        ):
+            run_async_worker(noop())
 
         self.assertEqual(captured["kwargs"], {})
 

@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 import os
-import subprocess
-from datetime import UTC, datetime
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from backend.cache import LocalSourceCache
-from backend.config import AppConfig, CacheConfig, ReadFileToolConfig, SearchTextToolConfig, ToolsConfig, WebSearchToolConfig
+from backend.config import (
+    AppConfig,
+    CacheConfig,
+    ReadFileToolConfig,
+    SearchTextToolConfig,
+    ToolsConfig,
+    WebSearchToolConfig,
+)
+from backend.events import EventEnvelope, EventType
 from backend.execution import (
     DEFAULT_TOOL_POLICY_HASH,
     DEFAULT_TOOL_REGISTRY_VERSION,
@@ -23,11 +30,10 @@ from backend.execution import (
     ToolExecutionContext,
     ToolRegistry,
 )
-from backend.events import EventEnvelope, EventType
 from backend.execution.repository import PostgresToolCallRepository
-from backend.workers.execution import ExecutionCommandHandler
 from backend.ids import new_uuid7
 from backend.storage import InMemoryObjectStorage
+from backend.workers.execution import ExecutionCommandHandler
 
 
 class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
@@ -76,7 +82,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(tools["web_search"]["parameters"]["properties"]["search_depth"]["enum"], ["basic", "advanced"])
-        self.assertEqual(tools["web_search"]["parameters"]["properties"]["topic"]["enum"], ["general", "news", "finance"])
+        self.assertEqual(
+            tools["web_search"]["parameters"]["properties"]["topic"]["enum"], ["general", "news", "finance"]
+        )
         self.assertEqual(tools["web_search"]["parameters"]["properties"]["max_results"]["maximum"], 10)
         self.assertIn("expected_version", tools["document_update"]["parameters"]["required"])
         self.assertTrue(tools["document_create"]["description"].startswith("Create"))
@@ -155,7 +163,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
             )
 
             result = await executor.execute(
-                ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+                ToolExecutionContext(
+                    tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()
+                ),
                 "web_search",
                 {"query": "deepdive", "max_results": 3},
                 config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
@@ -176,7 +186,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         for domain in ["localhost", "127.0.0.1", "http://example.com"]:
             with self.subTest(domain=domain):
                 result = await executor.execute(
-                    ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+                    ToolExecutionContext(
+                        tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()
+                    ),
                     "web_search",
                     {"query": "deepdive", "include_domains": [domain]},
                     config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
@@ -197,7 +209,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await executor.execute(
-            ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+            ToolExecutionContext(
+                tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()
+            ),
             "web_search",
             {"query": "deepdive", "time_range": "decade"},
             config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
@@ -220,7 +234,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await executor.execute(
-            ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+            ToolExecutionContext(
+                tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()
+            ),
             "web_search",
             {"query": "deepdive", "max_results": 10},
             config=AppConfig(tools=ToolsConfig(enabled=("web_search",), web_search=WebSearchToolConfig(max_results=3))),
@@ -242,7 +258,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await executor.execute(
-            ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+            ToolExecutionContext(
+                tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()
+            ),
             "web_search",
             {"query": "deepdive", "max_results": 10},
             config=AppConfig(tools=ToolsConfig(enabled=("web_search",), web_search=WebSearchToolConfig(max_results=3))),
@@ -270,7 +288,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         for arguments in cases:
             with self.subTest(arguments=arguments):
                 result = await executor.execute(
-                    ToolExecutionContext(tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()),
+                    ToolExecutionContext(
+                        tool_call_id=new_uuid7(), analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=new_uuid7()
+                    ),
                     "web_search",
                     arguments,
                     config=AppConfig(tools=ToolsConfig(enabled=("web_search",))),
@@ -311,7 +331,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await executor.execute(
-            ToolExecutionContext(tool_call_id=tool_call_id, analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=snapshot_id),
+            ToolExecutionContext(
+                tool_call_id=tool_call_id, analysis_id=new_uuid7(), agent_id=new_uuid7(), snapshot_id=snapshot_id
+            ),
             "web_search",
             {
                 "query": "deepdive",
@@ -686,7 +708,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         searched = await executor.execute(context, "search_file", {"query": "app", "max_results": 10})
 
         self.assertTrue(listed["ok"])
-        self.assertEqual([item["path"] for item in listed["result"]["items"]], ["backend/api/app.py", "backend/workers/outbox.py"])
+        self.assertEqual(
+            [item["path"] for item in listed["result"]["items"]], ["backend/api/app.py", "backend/workers/outbox.py"]
+        )
         self.assertTrue(searched["ok"])
         self.assertEqual([item["path"] for item in searched["result"]["items"]], ["backend/api/app.py"])
 
@@ -921,7 +945,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
                 search_config=SearchTextToolConfig(max_results=10, timeout_seconds=5, max_output_bytes=len(output) - 2),
             )
 
-            with patch("backend.execution._run_ripgrep_json", return_value=(output[: len(output) - 2], True, 0, "")) as run_mock:
+            with patch(
+                "backend.execution._run_ripgrep_json", return_value=(output[: len(output) - 2], True, 0, "")
+            ) as run_mock:
                 result = await executor.execute(
                     ToolExecutionContext(
                         tool_call_id=new_uuid7(),
@@ -1609,7 +1635,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
                 "agent_id": agent_id,
                 "snapshot_id": snapshot_id,
                 "status": "completed",
-                "result_summary": "{\"ok\":true}",
+                "result_summary": '{"ok":true}',
                 "error_code": None,
                 "error_message": None,
             },
@@ -1630,7 +1656,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.outbox_events[0].event_type, EventType.TOOL_CALL_COMPLETED)
         self.assertEqual(repository.outbox_events[0].payload["tool_call_id"], str(tool_call_id))
 
-    async def test_execution_handler_cancels_claimed_tool_call_without_executing_when_analysis_is_cancelled(self) -> None:
+    async def test_execution_handler_cancels_claimed_tool_call_without_executing_when_analysis_is_cancelled(
+        self,
+    ) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         snapshot_id = new_uuid7()
@@ -1987,7 +2015,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
                 "status": "queued",
             }
         )
-        executor = ContextCapturingExecutor({"ok": True, "tool_name": "document_create", "result": {"document_id": "doc_1"}})
+        executor = ContextCapturingExecutor(
+            {"ok": True, "tool_name": "document_create", "result": {"document_id": "doc_1"}}
+        )
 
         await ExecutionCommandHandler(tool_calls=repository, executor=executor)(
             EventEnvelope.new(
@@ -2060,7 +2090,9 @@ class PostgresToolCallRepositoryTest(unittest.IsolatedAsyncioTestCase):
             error_code=None,
             error_message=None,
             claim_owner="owner-1",
-            event=EventEnvelope.new(event_type=EventType.TOOL_CALL_COMPLETED, payload={"tool_call_id": str(tool_call_id)}),
+            event=EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_COMPLETED, payload={"tool_call_id": str(tool_call_id)}
+            ),
         )
 
         update_sql = str(connection.executed[0][0])
@@ -2094,7 +2126,9 @@ class PostgresToolCallRepositoryTest(unittest.IsolatedAsyncioTestCase):
             error_code=None,
             error_message=None,
             claim_owner="owner-1",
-            event=EventEnvelope.new(event_type=EventType.TOOL_CALL_COMPLETED, payload={"tool_call_id": str(tool_call_id)}),
+            event=EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_COMPLETED, payload={"tool_call_id": str(tool_call_id)}
+            ),
         )
 
         context_insert = _first_executed_params(connection, "INSERT INTO agent_context_items")
@@ -2253,7 +2287,9 @@ class PostgresToolCallRepositoryTest(unittest.IsolatedAsyncioTestCase):
 class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_glob_like_pattern_escapes_sql_wildcards(self) -> None:
         connection = FakeConnection()
-        repository = __import__("backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]).PostgresSnapshotToolRepository(connection)
+        repository = __import__(
+            "backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]
+        ).PostgresSnapshotToolRepository(connection)
 
         await repository.search_files(new_uuid7(), query="env", max_results=10, glob="config/_secret%.env", cursor=None)
 
@@ -2264,7 +2300,9 @@ class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_search_file_query_escapes_sql_wildcards(self) -> None:
         connection = FakeConnection()
-        repository = __import__("backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]).PostgresSnapshotToolRepository(connection)
+        repository = __import__(
+            "backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]
+        ).PostgresSnapshotToolRepository(connection)
 
         await repository.search_files(new_uuid7(), query="%_secret", max_results=10, glob=None, cursor=None)
 
@@ -2275,7 +2313,9 @@ class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_text_files_under_prefix_escapes_sql_wildcards(self) -> None:
         connection = FakeConnection()
-        repository = __import__("backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]).PostgresSnapshotToolRepository(connection)
+        repository = __import__(
+            "backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]
+        ).PostgresSnapshotToolRepository(connection)
 
         await repository.text_files_under_prefix(new_uuid7(), "src/%_secret/")
 
@@ -2286,7 +2326,9 @@ class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_text_files_under_prefix_excludes_git_directory(self) -> None:
         connection = FakeConnection()
-        repository = __import__("backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]).PostgresSnapshotToolRepository(connection)
+        repository = __import__(
+            "backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]
+        ).PostgresSnapshotToolRepository(connection)
 
         await repository.text_files_under_prefix(new_uuid7(), "")
 
@@ -2296,7 +2338,9 @@ class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_text_files_under_prefix_excludes_secret_metadata(self) -> None:
         connection = FakeConnection()
-        repository = __import__("backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]).PostgresSnapshotToolRepository(connection)
+        repository = __import__(
+            "backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]
+        ).PostgresSnapshotToolRepository(connection)
 
         await repository.text_files_under_prefix(new_uuid7(), "")
 
@@ -2308,7 +2352,9 @@ class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_list_files_and_search_files_exclude_secret_metadata(self) -> None:
         connection = FakeConnection()
-        repository = __import__("backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]).PostgresSnapshotToolRepository(connection)
+        repository = __import__(
+            "backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]
+        ).PostgresSnapshotToolRepository(connection)
 
         await repository.list_files(new_uuid7(), path="", recursive=True, max_results=10)
         list_sql = str(connection.executed[-1][0])
@@ -2324,7 +2370,9 @@ class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_recursive_list_files_escapes_prefix_wildcards(self) -> None:
         connection = FakeConnection()
-        repository = __import__("backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]).PostgresSnapshotToolRepository(connection)
+        repository = __import__(
+            "backend.execution.repository", fromlist=["PostgresSnapshotToolRepository"]
+        ).PostgresSnapshotToolRepository(connection)
 
         await repository.list_files(new_uuid7(), path="src/%_secret", recursive=True, max_results=10)
 
@@ -2396,7 +2444,9 @@ class FakeToolRepository(SnapshotToolRepository):
         rows = rows[offset:]
         return rows[:max_results]
 
-    async def search_files(self, snapshot_id, *, query: str, max_results: int, glob: str | None = None, cursor: str | None = None) -> list[dict]:
+    async def search_files(
+        self, snapshot_id, *, query: str, max_results: int, glob: str | None = None, cursor: str | None = None
+    ) -> list[dict]:
         del snapshot_id
         self.search_file_calls.append({"query": query, "max_results": max_results, "glob": glob, "cursor": cursor})
         rows = [file for file in self.files if query.lower() in file["path"].lower()]
@@ -2478,7 +2528,7 @@ class FakeResult:
         self._rows = rows
         self.rowcount = len(rows) if rowcount is None else rowcount
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def all(self) -> list[dict]:

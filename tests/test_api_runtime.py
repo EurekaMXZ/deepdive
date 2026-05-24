@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from backend.api.runtime import ApiRuntimeSettings, load_api_runtime_settings, main

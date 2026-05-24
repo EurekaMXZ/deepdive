@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator, Iterable, Iterator
 from datetime import datetime
+from typing import Annotated, Any, Protocol
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -16,20 +16,50 @@ from backend.api.schemas import (
     AnalysisResponse,
     ErrorResponse,
 )
+from backend.api.services import AnalysisRecord, encode_list_cursor, maybe_await
 from backend.api.sse import (
-    event_payload,
+    StreamEvent,
     event_seq,
-    event_type_of,
     format_sse_event,
     is_terminal_stream_event,
     parse_last_event_id,
 )
-from backend.api.services import AnalysisRecord, InMemoryAnalysisService, encode_list_cursor, maybe_await
-from backend.api.stream_schemas import TERMINAL_ANALYSIS_STATUSES, status_event_payload
+from backend.api.stream_schemas import TERMINAL_ANALYSIS_STATUSES
 from backend.ids import new_uuid7
 
 
-def get_analysis_service(request: Request) -> InMemoryAnalysisService:
+class AnalysisService(Protocol):
+    supports_live_events: bool
+
+    def create(
+        self,
+        *,
+        repository_url: str,
+        requested_ref: str,
+        analysis_profile_id: UUID | None = None,
+    ) -> AnalysisRecord: ...
+
+    def list(
+        self,
+        *,
+        status: str | None = None,
+        repository_url_hash: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> list[AnalysisRecord]: ...
+
+    def get(self, analysis_id: UUID) -> AnalysisRecord | None: ...
+
+    def cancel(self, analysis_id: UUID) -> AnalysisRecord | None: ...
+
+    def stream_events(self, analysis_id: UUID, *, after_seq: int = 0) -> Iterable[StreamEvent | dict[str, Any]]: ...
+
+    def analysis_status(self, analysis_id: UUID) -> str | None: ...
+
+
+def get_analysis_service(request: Request) -> AnalysisService:
     return request.app.state.analysis_service
 
 
@@ -43,7 +73,7 @@ router = APIRouter()
 )
 async def create_analysis(
     body: AnalysisCreateRequest,
-    service: InMemoryAnalysisService = Depends(get_analysis_service),
+    service: Annotated[AnalysisService, Depends(get_analysis_service)],
 ) -> AnalysisCreateResponse:
     record = await maybe_await(
         service.create(
@@ -63,13 +93,13 @@ async def create_analysis(
 
 @router.get("/analysis", response_model=AnalysisListResponse)
 async def list_analysis(
-    status_filter: str | None = Query(default=None, alias="status"),
-    repository_url_hash: str | None = Query(default=None),
-    created_after: datetime | None = Query(default=None),
-    created_before: datetime | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=100),
-    cursor: str | None = Query(default=None),
-    service: InMemoryAnalysisService = Depends(get_analysis_service),
+    service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    repository_url_hash: Annotated[str | None, Query()] = None,
+    created_after: Annotated[datetime | None, Query()] = None,
+    created_before: Annotated[datetime | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query()] = None,
 ) -> AnalysisListResponse:
     records = await maybe_await(
         service.list(
@@ -96,7 +126,7 @@ async def list_analysis(
 )
 async def get_analysis(
     analysis_id: UUID,
-    service: InMemoryAnalysisService = Depends(get_analysis_service),
+    service: Annotated[AnalysisService, Depends(get_analysis_service)],
 ) -> AnalysisResponse:
     record = await maybe_await(service.get(analysis_id))
     if record is None:
@@ -111,7 +141,7 @@ async def get_analysis(
 )
 async def cancel_analysis(
     analysis_id: UUID,
-    service: InMemoryAnalysisService = Depends(get_analysis_service),
+    service: Annotated[AnalysisService, Depends(get_analysis_service)],
 ) -> AnalysisResponse:
     record = await maybe_await(service.cancel(analysis_id))
     if record is None:
@@ -125,33 +155,30 @@ async def cancel_analysis(
 )
 async def stream_analysis_events(
     analysis_id: UUID,
-    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    poll_interval_seconds: float = Query(default=0.2, ge=0, le=10),
-    idle_timeout_seconds: float = Query(default=30.0, ge=0, le=300),
-    debug_raw_llm_events: bool = Query(default=False),
-    service: InMemoryAnalysisService = Depends(get_analysis_service),
+    service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    poll_interval_seconds: Annotated[float, Query(ge=0, le=10)] = 0.2,
+    idle_timeout_seconds: Annotated[float, Query(ge=0, le=300)] = 30.0,
+    debug_raw_llm_events: Annotated[bool, Query()] = False,
 ) -> StreamingResponse:
     del debug_raw_llm_events
     record = await maybe_await(service.get(analysis_id))
     if record is None:
         raise _not_found()
     after_seq = parse_last_event_id(last_event_id)
-    events_method = getattr(service, "stream_events", None)
-    if events_method is not None:
-        if getattr(service, "supports_live_events", False):
-            return StreamingResponse(
-                _polling_sse_event_records(
-                    service,
-                    analysis_id,
-                    after_seq=after_seq,
-                    poll_interval_seconds=poll_interval_seconds,
-                    idle_timeout_seconds=idle_timeout_seconds,
-                ),
-                media_type="text/event-stream",
-            )
-        events = await maybe_await(events_method(analysis_id, after_seq=after_seq))
-        return StreamingResponse(_sse_event_records(events), media_type="text/event-stream")
-    return StreamingResponse(_sse_events(record, after_seq=after_seq), media_type="text/event-stream")
+    if service.supports_live_events:
+        return StreamingResponse(
+            _polling_sse_event_records(
+                service,
+                analysis_id,
+                after_seq=after_seq,
+                poll_interval_seconds=poll_interval_seconds,
+                idle_timeout_seconds=idle_timeout_seconds,
+            ),
+            media_type="text/event-stream",
+        )
+    events = await maybe_await(service.stream_events(analysis_id, after_seq=after_seq))
+    return StreamingResponse(_sse_event_records(events), media_type="text/event-stream")
 
 
 def _to_response(record: AnalysisRecord) -> AnalysisResponse:
@@ -170,20 +197,13 @@ def _to_response(record: AnalysisRecord) -> AnalysisResponse:
     )
 
 
-def _sse_events(record: AnalysisRecord, *, after_seq: int = 0) -> Iterator[str]:
-    if after_seq >= 1:
-        return
-    payload = json.dumps(status_event_payload(status=record.status), separators=(",", ":"))
-    yield f"id: 1\nevent: status\ndata: {payload}\n\n"
-
-
-def _sse_event_records(events: Iterable) -> Iterator[str]:
+def _sse_event_records(events: Iterable[StreamEvent | dict[str, Any]]) -> Iterator[str]:
     for event in events:
         yield _format_sse_event(event)
 
 
 async def _polling_sse_event_records(
-    service: InMemoryAnalysisService,
+    service: AnalysisService,
     analysis_id: UUID,
     *,
     after_seq: int,
@@ -193,7 +213,6 @@ async def _polling_sse_event_records(
     last_seq = after_seq
     loop = asyncio.get_running_loop()
     idle_deadline = loop.time() + idle_timeout_seconds
-    status_method = getattr(service, "analysis_status", None)
     while True:
         events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
         emitted = False
@@ -210,18 +229,17 @@ async def _polling_sse_event_records(
         if terminal_event_seen:
             return
 
-        if status_method is not None:
-            current_status = await maybe_await(status_method(analysis_id))
-            if current_status in TERMINAL_ANALYSIS_STATUSES:
-                events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
-                for event in events:
-                    seq = event_seq(event)
-                    last_seq = max(last_seq, seq)
-                    terminal_event_seen = is_terminal_stream_event(event) or terminal_event_seen
-                    yield format_sse_event(event)
-                if terminal_event_seen:
-                    return
+        current_status = await maybe_await(service.analysis_status(analysis_id))
+        if current_status in TERMINAL_ANALYSIS_STATUSES:
+            events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
+            for event in events:
+                seq = event_seq(event)
+                last_seq = max(last_seq, seq)
+                terminal_event_seen = is_terminal_stream_event(event) or terminal_event_seen
+                yield format_sse_event(event)
+            if terminal_event_seen:
                 return
+            return
         if loop.time() >= idle_deadline:
             yield ": keepalive\n\n"
             idle_deadline = loop.time() + idle_timeout_seconds
@@ -231,28 +249,8 @@ async def _polling_sse_event_records(
             await asyncio.sleep(0)
 
 
-def _format_sse_event(event) -> str:
+def _format_sse_event(event: StreamEvent | dict[str, Any]) -> str:
     return format_sse_event(event)
-
-
-def _event_seq(event) -> int:
-    return event_seq(event)
-
-
-def _event_type(event) -> str:
-    return event_type_of(event)
-
-
-def _event_payload(event) -> dict:
-    return event_payload(event)
-
-
-def _is_terminal_event(event) -> bool:
-    return is_terminal_stream_event(event)
-
-
-def _parse_last_event_id(value: str | None) -> int:
-    return parse_last_event_id(value)
 
 
 def _not_found() -> HTTPException:

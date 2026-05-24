@@ -2,28 +2,20 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
+from backend.db.connections import AsyncDbConnection, ConnectionSource, connection_from
 from backend.events import EventEnvelope
 from backend.events.kafka import OutboxEvent
-from backend.db.connections import connection_from
 from backend.ids import new_uuid7
 
 
-class AsyncConnection(Protocol):
-    async def execute(self, statement, params=None):
-        ...
-
-    async def scalar(self, statement, params=None):
-        ...
-
-
 class DbOutboxSink:
-    def __init__(self, connection: AsyncConnection) -> None:
+    def __init__(self, connection: AsyncDbConnection) -> None:
         self._connection = connection
 
     async def add(self, event: EventEnvelope) -> None:
@@ -44,7 +36,7 @@ class DbOutboxSink:
 
 
 class SqlOutboxRepository:
-    def __init__(self, connection: AsyncConnection) -> None:
+    def __init__(self, connection: AsyncDbConnection) -> None:
         self._connection = connection
 
     async def fetch_unpublished(self, *, limit: int) -> list[OutboxEvent]:
@@ -61,10 +53,8 @@ class SqlOutboxRepository:
             ),
             {"limit": limit},
         )
-        return [
-            OutboxEvent(id=row["id"], event=EventEnvelope.from_json_value(row["payload_json"]))
-            for row in result.mappings().all()
-        ]
+        rows: Any = result.mappings().all()
+        return [OutboxEvent(id=row["id"], event=EventEnvelope.from_json_value(row["payload_json"])) for row in rows]
 
     async def mark_published(self, outbox_id: UUID) -> None:
         await self._connection.execute(
@@ -82,7 +72,7 @@ class SqlOutboxRepository:
 class SqlProcessedEventRepository:
     claim_ttl_seconds = 900
 
-    def __init__(self, connection_or_database: AsyncConnection) -> None:
+    def __init__(self, connection_or_database: ConnectionSource) -> None:
         self._connection_or_database = connection_or_database
 
     def _connection(self):
@@ -225,13 +215,15 @@ class SqlProcessedEventRepository:
             )
         return result.mappings().first() is not None
 
-    async def release_processing_claim(self, event_id: UUID, consumer_name: str, claim_owner: str | None = None) -> None:
+    async def release_processing_claim(
+        self, event_id: UUID, consumer_name: str, claim_owner: str | None = None
+    ) -> None:
         async with self._connection() as connection:
             await self._release_processing_claim(connection, event_id, consumer_name, claim_owner)
 
     async def _release_processing_claim(
         self,
-        connection: AsyncConnection,
+        connection: AsyncDbConnection,
         event_id: UUID,
         consumer_name: str,
         claim_owner: str | None = None,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Protocol, cast
 
 from backend.api.stream_schemas import TERMINAL_ANALYSIS_STATUSES, TERMINAL_STREAM_EVENT_TYPES
 
@@ -30,20 +30,29 @@ SENSITIVE_DISPLAY_KEYS = frozenset(
 
 def format_sse_event(event: Any) -> str:
     event_type = event_type_of(event)
-    payload = json.dumps(display_event_payload(event_type, event_payload(event)), ensure_ascii=False, separators=(",", ":"))
+    payload = json.dumps(
+        display_event_payload(event_type, event_payload(event)), ensure_ascii=False, separators=(",", ":")
+    )
     return f"id: {event_seq(event)}\nevent: {event_type}\ndata: {payload}\n\n"
 
 
-def event_seq(event: Any) -> int:
-    return event["seq"] if isinstance(event, dict) else event.seq
+class StreamEvent(Protocol):
+    seq: int
+    event_type: str
+    payload_json: dict[str, Any]
 
 
-def event_type_of(event: Any) -> str:
-    return event["event_type"] if isinstance(event, dict) else event.event_type
+def event_seq(event: StreamEvent | dict[str, Any]) -> int:
+    return int(event["seq"] if isinstance(event, dict) else event.seq)
 
 
-def event_payload(event: Any) -> dict[str, Any]:
-    return event["payload_json"] if isinstance(event, dict) else event.payload_json
+def event_type_of(event: StreamEvent | dict[str, Any]) -> str:
+    return str(event["event_type"] if isinstance(event, dict) else event.event_type)
+
+
+def event_payload(event: StreamEvent | dict[str, Any]) -> dict[str, Any]:
+    payload = event["payload_json"] if isinstance(event, dict) else event.payload_json
+    return cast(dict[str, Any], payload) if isinstance(payload, dict) else {}
 
 
 def display_event_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -97,11 +106,13 @@ def _only_keys(payload: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]
 
 def _strip_sensitive_display_fields(value: Any) -> Any:
     if isinstance(value, dict):
-        return {
-            key: _strip_sensitive_display_fields(item)
-            for key, item in value.items()
-            if str(key).lower() not in SENSITIVE_DISPLAY_KEYS
-        }
+        value = cast(dict[Any, Any], value)
+        display: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text.lower() not in SENSITIVE_DISPLAY_KEYS:
+                display[key_text] = _strip_sensitive_display_fields(item)
+        return display
     if isinstance(value, list):
-        return [_strip_sensitive_display_fields(item) for item in value]
+        return [_strip_sensitive_display_fields(item) for item in cast(list[Any], value)]
     return value

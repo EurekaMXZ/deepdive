@@ -200,7 +200,9 @@ class KafkaEventInfrastructureTest(unittest.IsolatedAsyncioTestCase):
             dlq_publisher=EventPublisher(FakeKafkaProducer()),
         )
 
-        consumed = await consume_messages(consumer, runner, max_messages=1, continue_on_deferred=True, deferred_backoff_seconds=0)
+        consumed = await consume_messages(
+            consumer, runner, max_messages=1, continue_on_deferred=True, deferred_backoff_seconds=0
+        )
 
         self.assertEqual(consumed, 1)
         self.assertEqual(handler.handled, [event])
@@ -398,7 +400,9 @@ class FakeProcessedEventRepository:
         self.renewed.append((event_id, consumer_name, claim_owner))
         return claim_owner == self.claim_owner
 
-    async def release_processing_claim(self, event_id: UUID, consumer_name: str, claim_owner: str | None = None) -> None:
+    async def release_processing_claim(
+        self, event_id: UUID, consumer_name: str, claim_owner: str | None = None
+    ) -> None:
         if (event_id, consumer_name) in self.claimed_events:
             self.claimed_events.remove((event_id, consumer_name))
         self.released.append((event_id, consumer_name, claim_owner))
@@ -434,7 +438,7 @@ class FakeKafkaConsumer:
         self.commits = 0
         self.deferred: list[ConsumedKafkaMessage] = []
 
-    def __aiter__(self) -> "FakeKafkaConsumer":
+    def __aiter__(self) -> FakeKafkaConsumer:
         return self
 
     async def __anext__(self) -> ConsumedKafkaMessage:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterable
 
-from backend.events import EventEnvelope
+from backend.db.connections import AsyncDbConnection, ConnectionSource
 from backend.events.kafka import (
     ConsumedKafkaMessage,
     EventConsumerRunner,
@@ -12,12 +12,12 @@ from backend.events.kafka import (
     OutboxPublisher,
     consume_messages,
 )
-from backend.events.repositories import AsyncConnection, SqlOutboxRepository, SqlProcessedEventRepository
+from backend.events.repositories import SqlOutboxRepository, SqlProcessedEventRepository
 
 
 async def publish_outbox_once(
     *,
-    connection: AsyncConnection,
+    connection: AsyncDbConnection,
     producer: KafkaProducerClient,
     limit: int,
 ) -> int:
@@ -30,8 +30,8 @@ async def publish_outbox_once(
 async def run_consumer_once(
     *,
     consumer: AsyncIterable[ConsumedKafkaMessage],
-    connection: AsyncConnection | None = None,
-    database=None,
+    connection: AsyncDbConnection | None = None,
+    database: ConnectionSource | None = None,
     consumer_name: str,
     handler: EventHandler,
     dlq_producer: KafkaProducerClient,
@@ -58,8 +58,8 @@ async def run_consumer_once(
 async def run_consumer_forever(
     *,
     consumer: AsyncIterable[ConsumedKafkaMessage],
-    connection: AsyncConnection | None = None,
-    database=None,
+    connection: AsyncDbConnection | None = None,
+    database: ConnectionSource | None = None,
     consumer_name: str,
     handler: EventHandler,
     dlq_producer: KafkaProducerClient,

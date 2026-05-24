@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import threading
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar, Protocol, cast
 
 from backend.agent import ModelResponse, ModelToolCall
 from backend.events.model_stream_payloads import (
@@ -19,8 +22,45 @@ class IncompleteResponseStreamError(RuntimeError):
     pass
 
 
-def _capture_delta_error(loop, delta_error_future, delta_closed: threading.Event, cancel_event: threading.Event):
-    def callback(future) -> None:
+DeltaEmitter = Callable[[str], None]
+RawEventEmitter = Callable[[str, dict[str, Any]], None]
+AsyncDeltaCallback = Callable[[str], Coroutine[Any, Any, None]]
+AsyncRawEventCallback = Callable[[str, dict[str, Any]], Coroutine[Any, Any, None]]
+
+
+class StreamingHttpResponse(Protocol):
+    headers: Any
+
+    def __iter__(self) -> Iterator[bytes]: ...
+
+    def read(self) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
+class ResponsesWebSocket(Protocol):
+    def send(self, value: str) -> None: ...
+
+    def recv(self) -> str | bytes | None: ...
+
+    def close(self) -> None: ...
+
+
+def _optional_delta_callback(value: Any) -> AsyncDeltaCallback | None:
+    return cast(AsyncDeltaCallback, value) if callable(value) else None
+
+
+def _optional_raw_event_callback(value: Any) -> AsyncRawEventCallback | None:
+    return cast(AsyncRawEventCallback, value) if callable(value) else None
+
+
+def _capture_delta_error(
+    loop: asyncio.AbstractEventLoop,
+    delta_error_future: asyncio.Future[None],
+    delta_closed: threading.Event,
+    cancel_event: threading.Event,
+) -> Callable[[concurrent.futures.Future[None]], None]:
+    def callback(future: concurrent.futures.Future[None]) -> None:
         if future.cancelled():
             return
         exc = future.exception()
@@ -34,20 +74,22 @@ def _capture_delta_error(loop, delta_error_future, delta_closed: threading.Event
     return callback
 
 
-def _create_websocket_connection(url: str, headers: list[str], timeout_seconds: int):
+def _create_websocket_connection(url: str, headers: list[str], timeout_seconds: int) -> ResponsesWebSocket:
     try:
-        from websocket import create_connection
+        import websocket
     except ImportError as exc:
         raise RuntimeError("Responses WebSocket mode requires the websocket-client package.") from exc
-    return create_connection(url, header=headers, timeout=timeout_seconds)
+    websocket_module = cast(Any, websocket)
+    factory = cast(Callable[..., ResponsesWebSocket], websocket_module.create_connection)
+    return factory(url, header=headers, timeout=timeout_seconds)
 
 
 def _websocket_url(base_url: str) -> str:
     url = base_url.rstrip("/") + "/responses"
     if url.startswith("https://"):
-        return "wss://" + url[len("https://"):]
+        return "wss://" + url[len("https://") :]
     if url.startswith("http://"):
-        return "ws://" + url[len("http://"):]
+        return "ws://" + url[len("http://") :]
     return url
 
 
@@ -60,16 +102,14 @@ class OpenAIResponsesRunner:
     user_agent: str = "DeepDive/1.0"
 
     async def create_response(self, request: dict[str, Any]) -> ModelResponse:
-        import asyncio
-
         loop = asyncio.get_running_loop()
-        pending_stream_writes = []
+        pending_stream_writes: list[concurrent.futures.Future[None]] = []
         request_for_thread = dict(request)
-        on_delta = request_for_thread.pop("on_delta", None)
-        on_raw_sse_event = request_for_thread.pop("on_raw_sse_event", None)
+        on_delta = _optional_delta_callback(request_for_thread.pop("on_delta", None))
+        on_raw_sse_event = _optional_raw_event_callback(request_for_thread.pop("on_raw_sse_event", None))
         stream_closed = threading.Event()
         cancel_event = threading.Event()
-        stream_error_future = loop.create_future()
+        stream_error_future: asyncio.Future[None] = loop.create_future()
 
         def emit_delta(text: str) -> None:
             if on_delta is not None and not stream_closed.is_set():
@@ -94,7 +134,7 @@ class OpenAIResponsesRunner:
             response_task = asyncio.create_task(response_future)
             try:
                 if self.total_timeout_seconds is not None and self.total_timeout_seconds > 0:
-                    done, pending = await asyncio.wait(
+                    done, _pending = await asyncio.wait(
                         {response_task, stream_error_future},
                         timeout=self.total_timeout_seconds,
                         return_when=asyncio.FIRST_COMPLETED,
@@ -102,13 +142,16 @@ class OpenAIResponsesRunner:
                     if not done:
                         raise TimeoutError()
                 else:
-                    done, pending = await asyncio.wait(
+                    done, _pending = await asyncio.wait(
                         {response_task, stream_error_future},
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                 if stream_error_future in done:
                     response_task.cancel()
-                    raise stream_error_future.result()
+                    exc = stream_error_future.exception()
+                    if exc is not None:
+                        raise exc
+                    raise RuntimeError("Model stream callback failed without an exception")
                 response = response_task.result()
             finally:
                 stream_error_future.cancel()
@@ -126,11 +169,11 @@ class OpenAIResponsesRunner:
     def _create_response_sync_with_cancel(
         self,
         request: dict[str, Any],
-        emit_delta=None,
-        emit_raw_sse_event=None,
+        emit_delta: DeltaEmitter | None = None,
+        emit_raw_sse_event: RawEventEmitter | None = None,
         cancel_event: threading.Event | None = None,
     ) -> ModelResponse:
-        kwargs = {"emit_delta": emit_delta}
+        kwargs: dict[str, Any] = {"emit_delta": emit_delta}
         if emit_raw_sse_event is not None:
             kwargs["emit_raw_sse_event"] = emit_raw_sse_event
         if cancel_event is not None:
@@ -152,8 +195,8 @@ class OpenAIResponsesRunner:
     def _create_response_sync(
         self,
         request: dict[str, Any],
-        emit_delta=None,
-        emit_raw_sse_event=None,
+        emit_delta: DeltaEmitter | None = None,
+        emit_raw_sse_event: RawEventEmitter | None = None,
         cancel_event: threading.Event | None = None,
     ) -> ModelResponse:
         body = dict(request)
@@ -171,6 +214,7 @@ class OpenAIResponsesRunner:
         )
         try:
             with urllib.request.urlopen(http_request, timeout=self.timeout_seconds) as response:
+                response = cast(StreamingHttpResponse, response)
                 if response.headers.get("content-type", "").split(";")[0] == "text/event-stream":
                     return self._parse_stream_response(
                         response,
@@ -186,10 +230,10 @@ class OpenAIResponsesRunner:
 
     def _parse_stream_response(
         self,
-        response,
+        response: StreamingHttpResponse,
         *,
-        emit_delta,
-        emit_raw_sse_event=None,
+        emit_delta: DeltaEmitter | None,
+        emit_raw_sse_event: RawEventEmitter | None = None,
         cancel_event: threading.Event | None = None,
     ) -> ModelResponse:
         output_text: list[str] = []
@@ -259,6 +303,9 @@ class OpenAIResponsesRunner:
 
 @dataclass(frozen=True)
 class OpenAIWebSocketResponsesRunner(OpenAIResponsesRunner):
+    _websocket: ClassVar[Any | None] = None
+    _websocket_lock: ClassVar[threading.Lock] = threading.Lock()
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "_websocket", None)
         object.__setattr__(self, "_websocket_lock", threading.Lock())
@@ -266,8 +313,8 @@ class OpenAIWebSocketResponsesRunner(OpenAIResponsesRunner):
     def _create_response_sync(
         self,
         request: dict[str, Any],
-        emit_delta=None,
-        emit_raw_sse_event=None,
+        emit_delta: DeltaEmitter | None = None,
+        emit_raw_sse_event: RawEventEmitter | None = None,
         cancel_event: threading.Event | None = None,
     ) -> ModelResponse:
         body = dict(request)
@@ -299,7 +346,7 @@ class OpenAIWebSocketResponsesRunner(OpenAIResponsesRunner):
         with self._websocket_lock:
             self._close_websocket_unlocked()
 
-    def _get_websocket(self):
+    def _get_websocket(self) -> ResponsesWebSocket:
         websocket = self._websocket
         if websocket is not None:
             return websocket
@@ -325,10 +372,10 @@ class OpenAIWebSocketResponsesRunner(OpenAIResponsesRunner):
 
     def _parse_websocket_response(
         self,
-        websocket,
+        websocket: ResponsesWebSocket,
         *,
-        emit_delta,
-        emit_raw_sse_event=None,
+        emit_delta: DeltaEmitter | None,
+        emit_raw_sse_event: RawEventEmitter | None = None,
         cancel_event: threading.Event | None = None,
     ) -> ModelResponse:
         output_text: list[str] = []
@@ -346,9 +393,10 @@ class OpenAIWebSocketResponsesRunner(OpenAIResponsesRunner):
             payload = _parse_websocket_message(raw_message)
             event_name = str(payload.get("type") or "")
             if event_name == "error":
-                error = payload.get("error") or {}
-                code = error.get("code") or payload.get("status") or "websocket_error"
-                message = error.get("message") or json.dumps(payload, ensure_ascii=False)
+                raw_error = payload.get("error")
+                error = cast(dict[str, Any], raw_error) if isinstance(raw_error, dict) else {}
+                code = str(error.get("code") or payload.get("status") or "websocket_error")
+                message = str(error.get("message") or json.dumps(payload, ensure_ascii=False))
                 raise RuntimeError(f"OpenAI Responses WebSocket failed: {code} {message}") from None
             if emit_raw_sse_event is not None:
                 for stream_event_name, stream_payload in _model_stream_payloads_for_response_event(event_name, payload):
@@ -385,10 +433,7 @@ class OpenAIWebSocketResponsesRunner(OpenAIResponsesRunner):
 def _parse_websocket_message(raw_message: str | bytes | None) -> dict[str, Any]:
     if raw_message is None:
         raise IncompleteResponseStreamError("OpenAI Responses websocket stream ended before response.completed")
-    if isinstance(raw_message, bytes):
-        raw_text = raw_message.decode("utf-8", errors="replace")
-    else:
-        raw_text = raw_message
+    raw_text = raw_message.decode("utf-8", errors="replace") if isinstance(raw_message, bytes) else raw_message
     if not raw_text.strip():
         raise IncompleteResponseStreamError("OpenAI Responses websocket stream ended before response.completed")
     try:
@@ -397,7 +442,7 @@ def _parse_websocket_message(raw_message: str | bytes | None) -> dict[str, Any]:
         raise RuntimeError("OpenAI Responses WebSocket returned invalid JSON event") from exc
     if not isinstance(payload, dict):
         raise RuntimeError("OpenAI Responses WebSocket returned non-object JSON event")
-    return payload
+    return cast(dict[str, Any], payload)
 
 
 def create_openai_responses_runner(
@@ -423,52 +468,57 @@ def create_openai_responses_runner(
 def parse_response_payload(payload: dict[str, Any]) -> ModelResponse:
     output_text_parts: list[str] = []
     tool_calls: list[ModelToolCall] = []
-    for item in payload.get("output", []):
+    output = payload.get("output", [])
+    output_items = _object_list(output)
+    for item in output_items:
         item_type = item.get("type")
         if item_type == "message":
-            for part in item.get("content", []):
+            content = item.get("content", [])
+            content_items = _object_list(content)
+            for part in content_items:
                 if part.get("type") == "output_text":
-                    output_text_parts.append(part.get("text", ""))
+                    output_text_parts.append(str(part.get("text", "")))
         if item_type == "function_call":
             arguments = item.get("arguments") or "{}"
             tool_calls.append(
                 ModelToolCall(
-                    call_id=item["call_id"],
-                    name=item["name"],
-                    arguments=json.loads(arguments),
+                    call_id=str(item["call_id"]),
+                    name=str(item["name"]),
+                    arguments=_json_object(arguments),
                 )
             )
-    usage = payload.get("usage") or {}
+    usage = _object_or_empty(payload.get("usage"))
     return ModelResponse(
-        response_id=payload["id"],
+        response_id=str(payload["id"]),
         output_text="".join(output_text_parts),
         tool_calls=tool_calls,
         usage={
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("total_tokens", 0),
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
         },
-        output_items=[dict(item) for item in payload.get("output", []) if isinstance(item, dict)],
+        output_items=output_items,
     )
 
 
 def parse_stream_event(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     if event_name == "response.output_text.delta":
-        return {"kind": "delta", "text": payload.get("delta", "")}
+        return {"kind": "delta", "text": str(payload.get("delta", ""))}
     if event_name == "response.function_call_arguments.done":
-        item = payload.get("item") or payload
+        raw_item = payload.get("item")
+        item = cast(dict[str, Any], raw_item) if isinstance(raw_item, dict) else payload
         if not item.get("call_id"):
             return {"kind": "tool_call_delta_done", "payload": payload}
         return {
             "kind": "tool_call",
             "tool_call": ModelToolCall(
-                call_id=item["call_id"],
-                name=item["name"],
-                arguments=json.loads(item.get("arguments") or "{}"),
+                call_id=str(item["call_id"]),
+                name=str(item["name"]),
+                arguments=_json_object(item.get("arguments") or "{}"),
             ),
         }
     if event_name == "response.completed":
-        return {"kind": "completed", "response": parse_response_payload(payload["response"])}
+        return {"kind": "completed", "response": parse_response_payload(_json_object(payload["response"]))}
     return {"kind": "ignored"}
 
 
@@ -480,7 +530,7 @@ class StreamingResponseAccumulator:
 
     def accept(self, event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         if event_name == "response.output_item.added":
-            item = payload.get("item") or {}
+            item = _object_or_empty(payload.get("item"))
             if item.get("type") == "function_call":
                 self._function_items[item["id"]] = dict(item)
             return {"kind": "ignored"}
@@ -491,7 +541,7 @@ class StreamingResponseAccumulator:
                 self._function_argument_fragments.setdefault(str(item_id), []).append(delta)
             return {"kind": "ignored"}
         if event_name == "response.output_item.done":
-            item = payload.get("item") or {}
+            item = _object_or_empty(payload.get("item"))
             if item.get("type") != "function_call":
                 return {"kind": "ignored"}
             return _tool_call_item(item)
@@ -504,10 +554,10 @@ class StreamingResponseAccumulator:
                     self._function_arguments_done.add(done_item_id)
             return parsed
 
-        done_payload = parsed["payload"]
+        done_payload = _json_object(parsed["payload"])
         item_id = done_payload.get("item_id")
         item = dict(self._function_items.get(str(item_id), {}))
-        item.update(done_payload.get("item") or {})
+        item.update(_object_or_empty(done_payload.get("item")))
         if "arguments" in done_payload:
             item["arguments"] = done_payload["arguments"]
         elif str(item_id) in self._function_argument_fragments:
@@ -518,21 +568,16 @@ class StreamingResponseAccumulator:
             self._function_arguments_done.add(str(item_id))
         return _tool_call_item(item)
 
+
 def _tool_call_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "kind": "tool_call",
         "tool_call": ModelToolCall(
-            call_id=item["call_id"],
-            name=item["name"],
-            arguments=json.loads(item.get("arguments") or "{}"),
+            call_id=str(item["call_id"]),
+            name=str(item["name"]),
+            arguments=_json_object(item.get("arguments") or "{}"),
         ),
     }
-
-
-def _model_stream_payload_for_response_event(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if event_name == "response.completed":
-        return completed_response_stream_payload(payload)
-    return payload
 
 
 def _model_stream_payloads_for_response_event(
@@ -545,11 +590,10 @@ def _model_stream_payloads_for_response_event(
     if summary_payload is not None:
         return [summary_payload]
     if event_name == "response.completed":
-        events = []
+        events: list[tuple[str, dict[str, Any]]] = []
         if include_completed_reasoning_summary:
             events.extend(
-                ("model_reasoning_summary", summary)
-                for summary in model_reasoning_summary_stream_payloads(payload)
+                ("model_reasoning_summary", summary) for summary in model_reasoning_summary_stream_payloads(payload)
             )
         events.append(("response.completed", completed_response_stream_payload(payload)))
         return events
@@ -560,7 +604,8 @@ def _function_event_item_id(payload: dict[str, Any]) -> str | None:
     item_id = payload.get("item_id")
     if item_id is not None:
         return str(item_id)
-    item = payload.get("item") or {}
+    raw_item = payload.get("item")
+    item = cast(dict[str, Any], raw_item) if isinstance(raw_item, dict) else {}
     if item.get("id") is not None:
         return str(item["id"])
     return None
@@ -569,4 +614,27 @@ def _function_event_item_id(payload: dict[str, Any]) -> str | None:
 def _flush_stream_event(event_name: str | None, data_lines: list[str]) -> tuple[str, dict[str, Any]] | None:
     if event_name is None or not data_lines:
         return None
-    return event_name, json.loads("\n".join(data_lines))
+    return event_name, _json_object("\n".join(data_lines))
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return cast(dict[str, Any], value)
+    parsed = json.loads(str(value))
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Expected JSON object")
+    return cast(dict[str, Any], parsed)
+
+
+def _object_or_empty(value: Any) -> dict[str, Any]:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def _object_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for item in cast(list[Any], value):
+        if isinstance(item, dict):
+            items.append(cast(dict[str, Any], item))
+    return items

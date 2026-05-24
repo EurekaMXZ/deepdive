@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from sqlalchemy.dialects.postgresql import JSONB, UUID
-
 from backend.db.schema import metadata
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 
 class DatabaseSchemaTest(unittest.TestCase):

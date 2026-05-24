@@ -100,7 +100,9 @@ class OpenAIRunnerTest(unittest.TestCase):
             user_agent="DeepDive/custom",
         )
 
-        with patch("backend.agent.openai_runner._create_websocket_connection", return_value=websocket) as create_connection:
+        with patch(
+            "backend.agent.openai_runner._create_websocket_connection", return_value=websocket
+        ) as create_connection:
             response = runner._create_response_sync(
                 {
                     "model": "gpt-5.5",
@@ -144,7 +146,7 @@ class OpenAIRunnerTest(unittest.TestCase):
                 {
                     "type": "response.function_call_arguments.delta",
                     "item_id": "fc_1",
-                    "delta": "{\"path\":\"README.md\"}",
+                    "delta": '{"path":"README.md"}',
                 },
                 {
                     "type": "response.function_call_arguments.done",
@@ -192,7 +194,9 @@ class OpenAIRunnerTest(unittest.TestCase):
         )
         runner = OpenAIWebSocketResponsesRunner(api_key="test-key")
 
-        with patch("backend.agent.openai_runner._create_websocket_connection", return_value=websocket) as create_connection:
+        with patch(
+            "backend.agent.openai_runner._create_websocket_connection", return_value=websocket
+        ) as create_connection:
             first = runner._create_response_sync({"model": "gpt-5.5", "input": []})
             second = runner._create_response_sync(
                 {
@@ -230,7 +234,7 @@ class OpenAIRunnerTest(unittest.TestCase):
                 "type": "function_call",
                 "call_id": "call_1",
                 "name": "read_file",
-                "arguments": "{\"path\":\"backend/api/app.py\"}",
+                "arguments": '{"path":"backend/api/app.py"}',
             },
         ]
         response = parse_response_payload(
@@ -256,7 +260,7 @@ class OpenAIRunnerTest(unittest.TestCase):
                 "type": "function_call",
                 "call_id": "call_1",
                 "name": "read_file",
-                "arguments": "{\"path\":\"README.md\"}",
+                "arguments": '{"path":"README.md"}',
                 "status": "completed",
                 "phase": "tool_calling",
             },
@@ -336,7 +340,7 @@ class OpenAIRunnerTest(unittest.TestCase):
                     "type": "function_call",
                     "call_id": "call_1",
                     "name": "read_file",
-                    "arguments": "{\"path\":\"a.py\"}",
+                    "arguments": '{"path":"a.py"}',
                 },
             },
         )
@@ -365,7 +369,7 @@ class OpenAIRunnerTest(unittest.TestCase):
                 "type": "response.function_call_arguments.done",
                 "call_id": "call_1",
                 "name": "search_file",
-                "arguments": "{\"query\":\"api\"}",
+                "arguments": '{"query":"api"}',
             },
         )
 
@@ -393,7 +397,7 @@ class OpenAIRunnerTest(unittest.TestCase):
             {
                 "type": "response.function_call_arguments.done",
                 "item_id": "fc_1",
-                "arguments": "{\"path\":\"a.py\"}",
+                "arguments": '{"path":"a.py"}',
             },
         )
 
@@ -414,7 +418,7 @@ class OpenAIRunnerTest(unittest.TestCase):
                     "type": "function_call",
                     "call_id": "call_1",
                     "name": "search_file",
-                    "arguments": "{\"query\":\"api\"}",
+                    "arguments": '{"query":"api"}',
                     "status": "completed",
                 },
             },
@@ -433,10 +437,10 @@ class OpenAIRunnerTest(unittest.TestCase):
                 FakeSseResponse(
                     [
                         b"event: response.created\n",
-                        b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_partial\"}}\n",
+                        b'data: {"type":"response.created","response":{"id":"resp_partial"}}\n',
                         b"\n",
                         b"event: response.output_text.delta\n",
-                        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n",
+                        b'data: {"type":"response.output_text.delta","delta":"partial"}\n',
                         b"\n",
                     ]
                 ),
@@ -451,12 +455,12 @@ class OpenAIRunnerTest(unittest.TestCase):
             FakeSseResponse(
                 [
                     b"event: response.output_text.delta\r\n",
-                    b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\r\n",
+                    b'data: {"type":"response.output_text.delta","delta":"hello"}\r\n',
                     b"\r\n",
                     b"event: response.completed\r\n",
                     (
-                        b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\","
-                        b"\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\r\n"
+                        b'data: {"type":"response.completed","response":{"id":"resp_1",'
+                        b'"output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\r\n'
                     ),
                     b"\r\n",
                 ]
@@ -478,51 +482,51 @@ class OpenAIRunnerTest(unittest.TestCase):
                 [
                     b"event: response.output_item.added\n",
                     (
-                        b"data: {\"type\":\"response.output_item.added\",\"response_id\":\"resp_1\","
-                        b"\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\","
-                        b"\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"\"}}\n"
+                        b'data: {"type":"response.output_item.added","response_id":"resp_1",'
+                        b'"output_index":0,"item":{"id":"fc_1","type":"function_call",'
+                        b'"call_id":"call_1","name":"read_file","arguments":""}}\n'
                     ),
                     b"\n",
                     b"event: response.function_call_arguments.delta\n",
                     (
-                        b"data: {\"type\":\"response.function_call_arguments.delta\","
-                        b"\"response_id\":\"resp_1\",\"item_id\":\"fc_1\",\"output_index\":0,"
-                        b"\"delta\":\"{\\\"path\\\":\"}\n"
+                        b'data: {"type":"response.function_call_arguments.delta",'
+                        b'"response_id":"resp_1","item_id":"fc_1","output_index":0,'
+                        b'"delta":"{\\"path\\":"}\n'
                     ),
                     b"\n",
                     b"event: response.function_call_arguments.delta\n",
                     (
-                        b"data: {\"type\":\"response.function_call_arguments.delta\","
-                        b"\"response_id\":\"resp_1\",\"item_id\":\"fc_1\",\"output_index\":0,"
-                        b"\"delta\":\"\\\"README.md\\\"}\"}\n"
+                        b'data: {"type":"response.function_call_arguments.delta",'
+                        b'"response_id":"resp_1","item_id":"fc_1","output_index":0,'
+                        b'"delta":"\\"README.md\\"}"}\n'
                     ),
                     b"\n",
                     b"event: response.function_call_arguments.done\n",
                     (
-                        b"data: {\"type\":\"response.function_call_arguments.done\","
-                        b"\"response_id\":\"resp_1\",\"item_id\":\"fc_1\",\"output_index\":0,"
-                        b"\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}\n"
+                        b'data: {"type":"response.function_call_arguments.done",'
+                        b'"response_id":"resp_1","item_id":"fc_1","output_index":0,'
+                        b'"arguments":"{\\"path\\":\\"README.md\\"}"}\n'
                     ),
                     b"\n",
                     b"event: response.output_text.delta\n",
                     (
-                        "data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_1\","
-                        "\"item_id\":\"msg_1\",\"output_index\":1,\"content_index\":0,\"delta\":\"分析\"}\n"
+                        'data: {"type":"response.output_text.delta","response_id":"resp_1",'
+                        '"item_id":"msg_1","output_index":1,"content_index":0,"delta":"分析"}\n'
                     ).encode(),
                     b"\n",
                     b"event: response.output_text.done\n",
                     (
-                        "data: {\"type\":\"response.output_text.done\",\"response_id\":\"resp_1\","
-                        "\"item_id\":\"msg_1\",\"output_index\":1,\"content_index\":0,\"text\":\"分析\"}\n"
+                        'data: {"type":"response.output_text.done","response_id":"resp_1",'
+                        '"item_id":"msg_1","output_index":1,"content_index":0,"text":"分析"}\n'
                     ).encode(),
                     b"\n",
                     b"event: response.completed\n",
                     (
-                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\","
-                        "\"output\":[{\"type\":\"function_call\",\"call_id\":\"call_1\","
-                        "\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"},"
-                        "{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"分析\"}]}],"
-                        "\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n"
+                        'data: {"type":"response.completed","response":{"id":"resp_1",'
+                        '"output":[{"type":"function_call","call_id":"call_1",'
+                        '"name":"read_file","arguments":"{\\"path\\":\\"README.md\\"}"},'
+                        '{"type":"message","content":[{"type":"output_text","text":"分析"}]}],'
+                        '"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}\n'
                     ).encode(),
                     b"\n",
                 ]
@@ -548,8 +552,8 @@ class OpenAIRunnerTest(unittest.TestCase):
             ],
         )
         self.assertEqual(emitted_raw_events[0][1]["item"]["name"], "read_file")
-        self.assertEqual(emitted_raw_events[1][1]["delta"], "{\"path\":")
-        self.assertEqual(emitted_raw_events[3][1]["arguments"], "{\"path\":\"README.md\"}")
+        self.assertEqual(emitted_raw_events[1][1]["delta"], '{"path":')
+        self.assertEqual(emitted_raw_events[3][1]["arguments"], '{"path":"README.md"}')
         self.assertEqual(emitted_raw_events[4][1]["delta"], "分析")
         self.assertEqual(emitted_raw_events[6][1], {"type": "response.completed", "response_id": "resp_1"})
 
@@ -562,31 +566,31 @@ class OpenAIRunnerTest(unittest.TestCase):
                 [
                     b"event: response.reasoning_summary_text.delta\n",
                     (
-                        "data: {\"type\":\"response.reasoning_summary_text.delta\","
-                        "\"response_id\":\"resp_1\",\"item_id\":\"rs_1\",\"output_index\":0,"
-                        "\"summary_index\":0,\"delta\":\"我将读取\"}\n"
+                        'data: {"type":"response.reasoning_summary_text.delta",'
+                        '"response_id":"resp_1","item_id":"rs_1","output_index":0,'
+                        '"summary_index":0,"delta":"我将读取"}\n'
                     ).encode(),
                     b"\n",
                     b"event: response.reasoning_summary_text.delta\n",
                     (
-                        "data: {\"type\":\"response.reasoning_summary_text.delta\","
-                        "\"response_id\":\"resp_1\",\"item_id\":\"rs_1\",\"output_index\":0,"
-                        "\"summary_index\":0,\"delta\":\"当前目录。\"}\n"
+                        'data: {"type":"response.reasoning_summary_text.delta",'
+                        '"response_id":"resp_1","item_id":"rs_1","output_index":0,'
+                        '"summary_index":0,"delta":"当前目录。"}\n'
                     ).encode(),
                     b"\n",
                     b"event: response.reasoning_summary_text.done\n",
                     (
-                        "data: {\"type\":\"response.reasoning_summary_text.done\","
-                        "\"response_id\":\"resp_1\",\"item_id\":\"rs_1\",\"output_index\":0,"
-                        "\"summary_index\":0,\"text\":\"我将读取当前目录。\"}\n"
+                        'data: {"type":"response.reasoning_summary_text.done",'
+                        '"response_id":"resp_1","item_id":"rs_1","output_index":0,'
+                        '"summary_index":0,"text":"我将读取当前目录。"}\n'
                     ).encode(),
                     b"\n",
                     b"event: response.completed\n",
                     (
-                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\","
-                        "\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\","
-                        "\"summary\":[{\"type\":\"summary_text\",\"text\":\"我将读取当前目录。\"}]}],"
-                        "\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n"
+                        'data: {"type":"response.completed","response":{"id":"resp_1",'
+                        '"output":[{"id":"rs_1","type":"reasoning",'
+                        '"summary":[{"type":"summary_text","text":"我将读取当前目录。"}]}],'
+                        '"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}\n'
                     ).encode(),
                     b"\n",
                 ]
@@ -629,10 +633,10 @@ class OpenAIRunnerTest(unittest.TestCase):
                 [
                     b"event: response.completed\n",
                     (
-                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\","
-                        "\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\","
-                        "\"summary\":[{\"type\":\"summary_text\",\"text\":\"我将读取当前目录。\"}]}],"
-                        "\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n"
+                        'data: {"type":"response.completed","response":{"id":"resp_1",'
+                        '"output":[{"id":"rs_1","type":"reasoning",'
+                        '"summary":[{"type":"summary_text","text":"我将读取当前目录。"}]}],'
+                        '"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}\n'
                     ).encode(),
                     b"\n",
                 ]

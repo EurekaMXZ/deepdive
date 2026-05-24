@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
-from contextlib import asynccontextmanager
 import os
+from contextlib import asynccontextmanager
+from typing import cast
+
+from fastapi import FastAPI, HTTPException
+from starlette.types import ExceptionHandler
 
 from backend.api.routes import api_exception_handler, router
 from backend.api.services import InMemoryAnalysisService, PostgresAnalysisService
@@ -14,7 +17,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="DeepDive Backend")
     app.state.analysis_service = InMemoryAnalysisService()
     app.include_router(router)
-    app.add_exception_handler(HTTPException, api_exception_handler)
+    app.add_exception_handler(HTTPException, cast(ExceptionHandler, api_exception_handler))
     return app
 
 
@@ -43,7 +46,7 @@ def create_postgres_app(
         config_version=config_version,
     )
     app.include_router(router)
-    app.add_exception_handler(HTTPException, api_exception_handler)
+    app.add_exception_handler(HTTPException, cast(ExceptionHandler, api_exception_handler))
 
     return app
 

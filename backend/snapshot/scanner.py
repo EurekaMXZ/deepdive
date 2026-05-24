@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
 from collections.abc import Callable
+from pathlib import Path, PurePosixPath
+from uuid import UUID
 
+from backend.security import is_secret_path
 from backend.snapshot.git_cli import GitTreeEntry
 from backend.snapshot.hashing import sha256_bytes, sha256_text
 from backend.snapshot.models import SnapshotFileRecord, SnapshotInstructionRecord, SnapshotPolicy
-from backend.security import is_secret_path
 from backend.storage import ObjectStorage, blob_key, instruction_key
 
 
@@ -14,7 +15,7 @@ class SnapshotScanner:
     def scan(
         self,
         *,
-        snapshot_id,
+        snapshot_id: UUID,
         checkout_dir: Path | None = None,
         tree_entries: list[GitTreeEntry],
         policy: SnapshotPolicy,
@@ -41,7 +42,13 @@ class SnapshotScanner:
                 records[path] = _large_file_record(path, tree_entry)
                 continue
 
-            content = blob_reader(tree_entry) if blob_reader is not None else fs_path.read_bytes()
+            if blob_reader is not None:
+                content = blob_reader(tree_entry)
+            elif fs_path is not None:
+                content = fs_path.read_bytes()
+            else:
+                records[path] = _metadata_record(path, tree_entry, entry_kind="file")
+                continue
             is_binary = _is_binary(content)
             is_large = len(content) > policy.max_file_bytes
             content_hash = sha256_bytes(content)
@@ -186,4 +193,3 @@ def _line_count(content: bytes) -> int:
         return 0
     newline_count = content.count(b"\n")
     return newline_count if content.endswith(b"\n") else newline_count + 1
-

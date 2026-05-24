@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 from backend.config import load_dotenv_if_exists
+from backend.db.connections import AsyncConnectionProvider
 from backend.db.runtime import create_database
+from backend.events import EventEnvelope
 from backend.events.kafka import AiokafkaEventConsumer, AiokafkaEventProducer
 from backend.events.runtime import run_consumer_forever, run_consumer_once
 from backend.workers.analysis import AnalysisCommandHandler
@@ -40,7 +42,10 @@ def load_analysis_worker_settings() -> AnalysisWorkerSettings:
         error_backoff_seconds=float(os.environ.get("ANALYSIS_WORKER_ERROR_BACKOFF_SECONDS", "5")),
         max_attempts=int(os.environ.get("ANALYSIS_WORKER_MAX_ATTEMPTS", os.environ.get("WORKER_MAX_ATTEMPTS", "3"))),
         event_heartbeat_interval_seconds=float(
-            os.environ.get("ANALYSIS_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"))
+            os.environ.get(
+                "ANALYSIS_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS",
+                os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"),
+            )
         ),
     )
 
@@ -113,10 +118,10 @@ def main() -> None:
 
 
 class _AnalysisHandlerFactory:
-    def __init__(self, database) -> None:
+    def __init__(self, database: AsyncConnectionProvider) -> None:
         self._database = database
 
-    async def __call__(self, event) -> None:
+    async def __call__(self, event: EventEnvelope) -> None:
         async with self._database.begin() as connection:
             await AnalysisCommandHandler(connection)(event)
 

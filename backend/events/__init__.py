@@ -15,4 +15,3 @@ __all__ = [
     "event_topic",
     "outbox_payload",
 ]
-

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 
 def completed_response_stream_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    response = payload.get("response") if isinstance(payload, dict) else None
-    response_id = response.get("id") if isinstance(response, dict) else payload.get("response_id")
+    response = _json_object(payload.get("response"))
+    response_id = response.get("id") if response is not None else payload.get("response_id")
     result = {"type": "response.completed"}
     if response_id:
         result["response_id"] = response_id
@@ -38,34 +38,44 @@ def model_reasoning_summary_text_stream_payload(
 
 
 def model_reasoning_summary_stream_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    response = payload.get("response") if isinstance(payload, dict) else None
-    if not isinstance(response, dict):
+    response = _json_object(payload.get("response"))
+    if response is None:
         return []
     response_id = response.get("id") if response.get("id") is not None else payload.get("response_id")
-    output = response.get("output")
-    if not isinstance(output, list):
+    output = _json_list(response.get("output"))
+    if not output:
         return []
 
     summaries: list[dict[str, Any]] = []
     for item in output:
-        if not isinstance(item, dict) or item.get("type") != "reasoning":
+        item_object = _json_object(item)
+        if item_object is None or item_object.get("type") != "reasoning":
             continue
-        summary_parts = item.get("summary")
-        if not isinstance(summary_parts, list):
+        summary_parts = _json_list(item_object.get("summary"))
+        if not summary_parts:
             continue
         for summary in summary_parts:
-            if not isinstance(summary, dict) or summary.get("type") != "summary_text":
+            summary_object = _json_object(summary)
+            if summary_object is None or summary_object.get("type") != "summary_text":
                 continue
-            text = summary.get("text")
+            text = summary_object.get("text")
             if not isinstance(text, str) or not text:
                 continue
             stream_payload: dict[str, Any] = {
                 "type": "model_reasoning_summary",
                 "text": text,
             }
-            if item.get("id") is not None:
-                stream_payload["item_id"] = str(item["id"])
+            if item_object.get("id") is not None:
+                stream_payload["item_id"] = str(item_object["id"])
             if response_id is not None:
                 stream_payload["response_id"] = str(response_id)
             summaries.append(stream_payload)
     return summaries
+
+
+def _json_object(value: Any) -> dict[str, Any] | None:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else None
+
+
+def _json_list(value: Any) -> list[Any]:
+    return cast(list[Any], value) if isinstance(value, list) else []

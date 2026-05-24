@@ -8,8 +8,8 @@ from uuid import UUID
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
+from backend.db.connections import AsyncDbConnection
 from backend.ids import new_uuid7
-
 
 MODEL_CONTEXT_SOURCE = "model"
 TOOL_CONTEXT_SOURCE = "tool"
@@ -57,7 +57,7 @@ def assistant_output_idempotency_key(response_id: str) -> str:
 
 
 async def append_context_item_on_connection(
-    connection,
+    connection: AsyncDbConnection,
     *,
     agent_id: UUID,
     turn_id: UUID | None,
@@ -110,4 +110,3 @@ async def append_context_item_on_connection(
             "created_at": datetime.now(UTC),
         },
     )
-

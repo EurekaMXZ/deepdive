@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from backend.agent.compaction import ContextCompactor
@@ -52,8 +52,8 @@ class AgentCommandHandler:
                     analysis_id=event.analysis_id,
                     agent_id=event.agent_id,
                     event_type="status",
-                payload={"status": "cancelled"},
-            )
+                    payload={"status": "cancelled"},
+                )
             return
         raise ValueError(f"Unsupported agent event: {event.event_type}")
 
@@ -74,13 +74,17 @@ class AgentCommandHandler:
         if existing_turn is not None:
             if existing_turn.get("status") == "completed":
                 return
-            recovered = await self._recover_incomplete_turn(event=event, session=session, turn_id=UUID(str(existing_turn["id"])))
+            recovered = await self._recover_incomplete_turn(
+                event=event, session=session, turn_id=UUID(str(existing_turn["id"]))
+            )
             if recovered:
                 return
             if _is_retryable_model_turn(existing_turn):
                 await self._run_model_turn(event=event, session=session, turn_id=UUID(str(existing_turn["id"])))
                 return
-            await self._fail_unrecoverable_turn_replay(event=event, session=session, turn_id=UUID(str(existing_turn["id"])))
+            await self._fail_unrecoverable_turn_replay(
+                event=event, session=session, turn_id=UUID(str(existing_turn["id"]))
+            )
             return
         if session.snapshot_id is None and event.snapshot_id is not None:
             session = AgentSessionState(
@@ -142,7 +146,9 @@ class AgentCommandHandler:
                 include_local_history=True,
             )
             if self._context_exceeds_threshold(session=session, context=context):
-                await self._fail_context_too_large_after_compact(event=event, session=session, turn_id=turn_id, context=context)
+                await self._fail_context_too_large_after_compact(
+                    event=event, session=session, turn_id=turn_id, context=context
+                )
                 return
         show_reasoning_summary = bool(
             session.effective_runtime_json.get(
@@ -160,7 +166,11 @@ class AgentCommandHandler:
                 text = payload.get("text")
                 if isinstance(text, str) and text:
                     reasoning_summary_fragments.append(text)
-            if event_name == "model_reasoning_summary.done" and show_reasoning_summary and not reasoning_summary_final_emitted:
+            if (
+                event_name == "model_reasoning_summary.done"
+                and show_reasoning_summary
+                and not reasoning_summary_final_emitted
+            ):
                 text = payload.get("text")
                 final_text = text if isinstance(text, str) and text else "".join(reasoning_summary_fragments)
                 if final_text:
@@ -221,10 +231,7 @@ class AgentCommandHandler:
         }
         if context.get("include"):
             request["include"] = context["include"]
-        if (
-            not compacted
-            and use_previous_response_id
-        ):
+        if not compacted and use_previous_response_id:
             request["previous_response_id"] = session.latest_response_id
         try:
             response = await self._responses_runner.create_response(request)
@@ -252,7 +259,11 @@ class AgentCommandHandler:
             await self._fail_model_call(event=event, session=session, turn_id=turn_id, exc=exc)
             return
         refreshed_session = await self._repository.get_session(session.agent_id)
-        if refreshed_session is None or refreshed_session.status in TERMINAL_SESSION_STATUSES or refreshed_session.status == "cancelling":
+        if (
+            refreshed_session is None
+            or refreshed_session.status in TERMINAL_SESSION_STATUSES
+            or refreshed_session.status == "cancelling"
+        ):
             return
         session = refreshed_session
         output_ref = self._store_model_output(session=session, turn_id=turn_id, response=response)
@@ -271,10 +282,14 @@ class AgentCommandHandler:
                     "input_ref": context["input_ref"],
                     "output_ref": output_ref,
                     "usage": response.usage,
-                } if atomic_tool_call is not None else None,
+                }
+                if atomic_tool_call is not None
+                else None,
             )
             if atomic_tool_call is None:
-                await self._repository.update_latest_response(agent_id=session.agent_id, response_id=response.response_id)
+                await self._repository.update_latest_response(
+                    agent_id=session.agent_id, response_id=response.response_id
+                )
                 await self._repository.complete_turn(
                     turn_id=turn_id,
                     response_id=response.response_id,
@@ -374,7 +389,9 @@ class AgentCommandHandler:
             response_id=response_id,
         )
 
-    async def _compact_if_needed(self, *, event: EventEnvelope, session: AgentSessionState, context: dict[str, Any]) -> bool:
+    async def _compact_if_needed(
+        self, *, event: EventEnvelope, session: AgentSessionState, context: dict[str, Any]
+    ) -> bool:
         threshold = int(session.effective_limits_json.get("auto_compact_threshold_tokens") or 0)
         token_estimate = int(context.get("token_estimate") or 0)
         if threshold <= 0 or token_estimate <= threshold:
@@ -426,20 +443,26 @@ class AgentCommandHandler:
         token_estimate = int(context.get("token_estimate") or 0)
         return threshold > 0 and token_estimate > threshold
 
-    async def _tool_output_items(self, event: EventEnvelope, *, use_previous_response_id: bool = False) -> list[dict[str, Any]]:
-        if event.event_type not in {EventType.TOOL_CALL_COMPLETED, EventType.TOOL_CALL_FAILED, EventType.TOOL_CALL_DENIED}:
+    async def _tool_output_items(
+        self, event: EventEnvelope, *, use_previous_response_id: bool = False
+    ) -> list[dict[str, Any]]:
+        if event.event_type not in {
+            EventType.TOOL_CALL_COMPLETED,
+            EventType.TOOL_CALL_FAILED,
+            EventType.TOOL_CALL_DENIED,
+        }:
             return []
         tool_call_id = event.payload.get("tool_call_id")
         if not tool_call_id:
             return []
         output = await self._repository.get_pending_tool_output(tool_call_id=UUID(str(tool_call_id)))
         if output is None and event.event_type in {EventType.TOOL_CALL_FAILED, EventType.TOOL_CALL_DENIED}:
-            error = event.payload.get("error") or {}
+            error = _json_object(event.payload.get("error")) or {}
             fallback_code = "TOOL_DENIED" if event.event_type == EventType.TOOL_CALL_DENIED else "TOOL_FAILED"
             output = {
                 "call_id": str(event.payload.get("openai_call_id") or tool_call_id),
                 "name": str(event.payload.get("tool_name") or "unknown_tool"),
-                "arguments": event.payload.get("arguments") or {},
+                "arguments": _json_object(event.payload.get("arguments")) or {},
                 "output": json.dumps(
                     {
                         "ok": False,
@@ -454,16 +477,17 @@ class AgentCommandHandler:
             }
         if output is None:
             return []
-        function_output = {
+        output_ref = output.get("output_ref")
+        function_output: dict[str, Any] = {
             "type": "function_call_output",
             "call_id": output["call_id"],
             "output": output["output"],
         }
         if use_previous_response_id:
             return [function_output]
-        previous_items = self._previous_output_items(output.get("output_ref"))
+        previous_items = self._previous_output_items(output_ref if isinstance(output_ref, str) else None)
         if previous_items:
-            return previous_items + [function_output]
+            return [*previous_items, function_output]
         return [
             {
                 "type": "function_call",
@@ -479,7 +503,9 @@ class AgentCommandHandler:
             return []
         return self._context_assembler.load_model_output_items(output_ref)
 
-    async def _turn_for_trigger(self, *, agent_id: UUID, event_id: UUID, trigger_domain_key: str | None) -> dict[str, Any] | None:
+    async def _turn_for_trigger(
+        self, *, agent_id: UUID, event_id: UUID, trigger_domain_key: str | None
+    ) -> dict[str, Any] | None:
         get_turn_for_event = getattr(self._repository, "get_turn_for_event", None)
         if get_turn_for_event is not None:
             turn = await get_turn_for_event(agent_id=agent_id, event_id=event_id)
@@ -495,7 +521,9 @@ class AgentCommandHandler:
             return {"id": event_id, "status": "completed"}
         return None
 
-    async def _recover_incomplete_turn(self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID) -> bool:
+    async def _recover_incomplete_turn(
+        self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID
+    ) -> bool:
         get_pending_tool_call_for_turn = getattr(self._repository, "get_pending_tool_call_for_turn", None)
         if get_pending_tool_call_for_turn is None:
             return False
@@ -503,7 +531,7 @@ class AgentCommandHandler:
         if tool_call is None:
             return False
         tool_call_id = UUID(str(tool_call["id"]))
-        arguments = tool_call.get("arguments_json") or {}
+        arguments = _json_object(tool_call.get("arguments_json")) or {}
         event_envelope = EventEnvelope.new(
             event_type=EventType.TOOL_CALL_REQUESTED,
             analysis_id=session.analysis_id,
@@ -707,7 +735,6 @@ class AgentCommandHandler:
     def _store_model_output(self, *, session: AgentSessionState, turn_id: UUID, response: ModelResponse) -> str:
         return self._context_assembler.store_model_output(session=session, turn_id=turn_id, response=response)
 
-
     async def _fail_max_turns_exceeded(self, *, event: EventEnvelope, session: AgentSessionState) -> None:
         message = f"Agent reached max_turns={session.max_turns} before producing a final answer."
         failed = await self._repository.fail_analysis(
@@ -746,7 +773,9 @@ class AgentCommandHandler:
             )
         )
 
-    async def _fail_max_tool_calls_exceeded(self, *, event: EventEnvelope, session: AgentSessionState, max_tool_calls: int) -> None:
+    async def _fail_max_tool_calls_exceeded(
+        self, *, event: EventEnvelope, session: AgentSessionState, max_tool_calls: int
+    ) -> None:
         message = f"Agent reached max_tool_calls={max_tool_calls} before producing a final answer."
         failed = await self._repository.fail_analysis(
             analysis_id=session.analysis_id,
@@ -784,7 +813,9 @@ class AgentCommandHandler:
             )
         )
 
-    async def _fail_model_call(self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID, exc: Exception) -> None:
+    async def _fail_model_call(
+        self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID, exc: Exception
+    ) -> None:
         message = _safe_error_message(exc)
         await self._repository.fail_turn(turn_id=turn_id, error_code="MODEL_CALL_FAILED", error_message=message)
         failed = await self._repository.fail_analysis(
@@ -837,7 +868,9 @@ class AgentCommandHandler:
             f"Context token estimate {token_estimate} still exceeds "
             f"auto_compact_threshold_tokens={threshold} after compaction."
         )
-        await self._repository.fail_turn(turn_id=turn_id, error_code="CONTEXT_TOO_LARGE_AFTER_COMPACT", error_message=message)
+        await self._repository.fail_turn(
+            turn_id=turn_id, error_code="CONTEXT_TOO_LARGE_AFTER_COMPACT", error_message=message
+        )
         failed = await self._repository.fail_analysis(
             analysis_id=session.analysis_id,
             agent_id=session.agent_id,
@@ -872,7 +905,9 @@ class AgentCommandHandler:
             )
         )
 
-    async def _fail_unrecoverable_turn_replay(self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID) -> None:
+    async def _fail_unrecoverable_turn_replay(
+        self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID
+    ) -> None:
         message = (
             "Agent turn was replayed while an earlier attempt for the same event was not completed; "
             "automatic recovery for partial model calls is not available yet."
@@ -929,11 +964,15 @@ def _previous_tool_result_payload(*, tool_call: ModelToolCall, previous_result: 
     result_summary = previous_result.get("result_summary")
     if isinstance(result_summary, str):
         try:
-            payload = json.loads(result_summary)
+            payload = _json_object(json.loads(result_summary)) or {
+                "ok": True,
+                "tool_name": tool_call.name,
+                "result": result_summary,
+            }
         except json.JSONDecodeError:
             payload = {"ok": True, "tool_name": tool_call.name, "result": result_summary}
     elif isinstance(result_summary, dict):
-        payload = dict(result_summary)
+        payload = dict(cast(dict[str, Any], result_summary))
     else:
         payload = {"ok": True, "tool_name": tool_call.name, "result": result_summary}
     payload.setdefault("ok", True)
@@ -942,6 +981,10 @@ def _previous_tool_result_payload(*, tool_call: ModelToolCall, previous_result: 
     if previous_result.get("result_ref") and "result_ref" not in payload:
         payload["result_ref"] = previous_result["result_ref"]
     return payload
+
+
+def _json_object(value: Any) -> dict[str, Any] | None:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else None
 
 
 def _can_reuse_completed_tool_result(tool_name: str) -> bool:

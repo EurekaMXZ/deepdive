@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from backend.events import EventEnvelope, EventType, event_key, event_topic, outbox_payload
+from backend.events import EventEnvelope, EventType, event_topic, outbox_payload
 from backend.ids import new_uuid7
 
 

@@ -7,12 +7,12 @@ from uuid import UUID
 from sqlalchemy import text
 
 from backend.agent.models import AgentSessionState
-from backend.db.connections import connection_from
+from backend.db.connections import ConnectionSource, connection_from
 from backend.security import is_secret_path, visible_path_sql
 
 
 class AgentContextStore:
-    def __init__(self, connection_or_database) -> None:
+    def __init__(self, connection_or_database: ConnectionSource) -> None:
         self._connection_or_database = connection_or_database
 
     def _connection(self):
@@ -27,7 +27,7 @@ class AgentContextStore:
                 "content": [
                     {
                         "type": "input_text",
-                        "text": "请分析这个仓库的源码结构。先使用 list_files/search_file/search_text/read_file 获取证据，再给出结论。",
+                        "text": "请分析这个仓库的源码结构。先使用 list_files/search_file/search_text/read_file 获取证据, 再给出结论。",
                     }
                 ],
             }
@@ -39,7 +39,7 @@ class AgentContextStore:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "当前 snapshot 的文件树摘要：\n" + "\n".join(tree[:500]),
+                            "text": "当前 snapshot 的文件树摘要:\n" + "\n".join(tree[:500]),
                         }
                     ],
                 }
@@ -48,7 +48,12 @@ class AgentContextStore:
             items.append(
                 {
                     "role": "user",
-                    "content": [{"type": "input_text", "text": "已 compact 的上下文摘要：\n" + json.dumps(memory, ensure_ascii=False)}],
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "已 compact 的上下文摘要:\n" + json.dumps(memory, ensure_ascii=False),
+                        }
+                    ],
                 }
             )
         return items

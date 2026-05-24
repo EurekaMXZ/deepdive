@@ -85,9 +85,7 @@ class AnalysisWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INSERT INTO outbox_events", executed_sql)
 
         stream_events = [
-            params
-            for statement, params in connection.executed
-            if "INSERT INTO agent_stream_events" in str(statement)
+            params for statement, params in connection.executed if "INSERT INTO agent_stream_events" in str(statement)
         ]
         self.assertEqual([event["event_type"] for event in stream_events], ["status", "done"])
         self.assertEqual(stream_events[0]["payload_json"], {"status": "cancelled"})
@@ -144,7 +142,7 @@ class FakeResult:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def first(self) -> dict | None:

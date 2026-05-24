@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from backend.cache import LocalSourceCache
@@ -16,7 +16,6 @@ from backend.execution.repository import PostgresSnapshotToolRepository, Postgre
 from backend.storage import DEFAULT_OBJECT_BUCKET, MinioObjectStorage
 from backend.workers.asyncio_compat import run_async_worker
 from backend.workers.execution import ExecutionCommandHandler
-from backend.workers.snapshot_runtime import _bool_env
 
 
 @dataclass(frozen=True)
@@ -70,7 +69,10 @@ def load_execution_worker_settings() -> ExecutionWorkerSettings:
         error_backoff_seconds=float(os.environ.get("EXECUTION_WORKER_ERROR_BACKOFF_SECONDS", "5")),
         max_attempts=int(os.environ.get("EXECUTION_WORKER_MAX_ATTEMPTS", os.environ.get("WORKER_MAX_ATTEMPTS", "3"))),
         event_heartbeat_interval_seconds=float(
-            os.environ.get("EXECUTION_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"))
+            os.environ.get(
+                "EXECUTION_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS",
+                os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"),
+            )
         ),
         tool_heartbeat_interval_seconds=float(os.environ.get("EXECUTION_TOOL_HEARTBEAT_INTERVAL_SECONDS", "60")),
         tavily_api_key=os.environ.get("TAVILY_API_KEY", ""),
@@ -198,6 +200,10 @@ async def main_async() -> None:
 
 def main() -> None:
     run_async_worker(main_async())
+
+
+def _bool_env(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 if __name__ == "__main__":

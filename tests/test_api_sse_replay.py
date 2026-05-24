@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 import unittest
-
-from fastapi.testclient import TestClient
+from datetime import UTC, datetime
 
 from backend.api.app import create_app
 from backend.api.routes import _polling_sse_event_records
 from backend.api.services import AnalysisRecord, InMemoryAnalysisService
 from backend.ids import new_uuid7
+from fastapi.testclient import TestClient
 
 
 class ApiSseReplayTest(unittest.TestCase):
@@ -73,7 +72,7 @@ class ApiSseReplayTest(unittest.TestCase):
                     "event_type": "model_reasoning_summary",
                     "payload_json": {
                         "type": "model_reasoning_summary",
-                        "text": "我会先查看仓库结构，再读取入口文件。",
+                        "text": "我会先查看仓库结构, 再读取入口文件。",
                         "item_id": "rs_1",
                         "response_id": "resp_1",
                     },

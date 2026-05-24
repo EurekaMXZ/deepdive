@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from backend.config import app_config_from_json, load_app_config_from_env, load_dotenv_if_exists
@@ -191,7 +191,10 @@ class EnvConfigTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {"DEEPDIVE_ENV_FILE": str(env_file)}, clear=True), patch("os.getcwd", return_value=str(root)):
+            with (
+                patch.dict(os.environ, {"DEEPDIVE_ENV_FILE": str(env_file)}, clear=True),
+                patch("os.getcwd", return_value=str(root)),
+            ):
                 config = load_app_config_from_env()
 
         self.assertEqual(config.analysis.profiles["security_review"].goal, "检查安全边界。")
@@ -237,7 +240,17 @@ class EnvConfigTest(unittest.TestCase):
         ):
             config = load_app_config_from_env()
 
-        self.assertEqual(config.tools.enabled, ("web_search", "document_create", "document_get", "document_update", "document_delete", "document_finalize"))
+        self.assertEqual(
+            config.tools.enabled,
+            (
+                "web_search",
+                "document_create",
+                "document_get",
+                "document_update",
+                "document_delete",
+                "document_finalize",
+            ),
+        )
         self.assertEqual(config.tools.web_search.max_results, 8)
         self.assertEqual(config.tools.web_search.timeout_seconds, 12)
         self.assertEqual(config.tools.web_search.max_query_chars, 400)
@@ -290,7 +303,10 @@ class EnvConfigTest(unittest.TestCase):
             {"OPENAI_WEB_SEARCH_RETURN_TOKEN_BUDGET": "42"},
             {"OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": "https://example.com"},
             {"OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": ",".join(f"example{i}.com" for i in range(101))},
-            {"OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": "example.com", "OPENAI_WEB_SEARCH_BLOCKED_DOMAINS": "blocked.example"},
+            {
+                "OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": "example.com",
+                "OPENAI_WEB_SEARCH_BLOCKED_DOMAINS": "blocked.example",
+            },
         ]
 
         for env in invalid_envs:
@@ -300,9 +316,8 @@ class EnvConfigTest(unittest.TestCase):
                     "OPENAI_WEB_SEARCH_ENABLED": "true",
                     **env,
                 }
-                with patch.dict(os.environ, values, clear=True):
-                    with self.assertRaises(ValueError):
-                        load_app_config_from_env()
+                with patch.dict(os.environ, values, clear=True), self.assertRaises(ValueError):
+                    load_app_config_from_env()
 
     def test_openai_web_search_config_rejects_api_incompatible_values_from_json(self) -> None:
         invalid_sections = [
@@ -314,9 +329,8 @@ class EnvConfigTest(unittest.TestCase):
         ]
 
         for section in invalid_sections:
-            with self.subTest(section=section):
-                with self.assertRaises(ValueError):
-                    app_config_from_json({"tools": {"openai_web_search": section}})
+            with self.subTest(section=section), self.assertRaises(ValueError):
+                app_config_from_json({"tools": {"openai_web_search": section}})
 
     def test_web_search_config_rejects_invalid_limits_from_env_and_json(self) -> None:
         invalid_envs = [
@@ -332,9 +346,8 @@ class EnvConfigTest(unittest.TestCase):
                     "DEEPDIVE_ENV_FILE": str(Path(tempfile.gettempdir()) / "deepdive-missing.env"),
                     **env,
                 }
-                with patch.dict(os.environ, values, clear=True):
-                    with self.assertRaises(ValueError):
-                        load_app_config_from_env()
+                with patch.dict(os.environ, values, clear=True), self.assertRaises(ValueError):
+                    load_app_config_from_env()
 
         invalid_jsons = [
             {"max_results": 0},
@@ -343,9 +356,8 @@ class EnvConfigTest(unittest.TestCase):
             {"max_query_chars": 0},
         ]
         for section in invalid_jsons:
-            with self.subTest(section=section):
-                with self.assertRaises(ValueError):
-                    app_config_from_json({"tools": {"web_search": section}})
+            with self.subTest(section=section), self.assertRaises(ValueError):
+                app_config_from_json({"tools": {"web_search": section}})
 
 
 if __name__ == "__main__":

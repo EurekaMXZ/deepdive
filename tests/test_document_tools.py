@@ -4,9 +4,9 @@ import unittest
 from datetime import UTC, datetime
 from uuid import UUID
 
+from backend.config import AppConfig, ToolsConfig
 from backend.documents import DocumentRepository, DocumentService
 from backend.execution import PermissionEngine, SourceToolExecutor, ToolExecutionContext
-from backend.config import AppConfig, ToolsConfig
 from backend.ids import new_uuid7
 from backend.storage import InMemoryObjectStorage
 
@@ -266,7 +266,9 @@ class DocumentToolsTest(unittest.IsolatedAsyncioTestCase):
             permission_engine=PermissionEngine(),
             document_service=DocumentService(repository=documents, storage=storage),
         )
-        config = AppConfig(tools=ToolsConfig(enabled=("document_create", "document_update", "document_delete", "document_finalize")))
+        config = AppConfig(
+            tools=ToolsConfig(enabled=("document_create", "document_update", "document_delete", "document_finalize"))
+        )
 
         created = await executor.execute(
             ToolExecutionContext(new_uuid7(), agent_id, snapshot_id, analysis_id),
@@ -322,7 +324,9 @@ class DocumentToolsTest(unittest.IsolatedAsyncioTestCase):
             snapshot_id=new_uuid7(),
         )
 
-        created = await executor.execute(context, "document_create", {"title": "Scratch", "content": "draft"}, config=config)
+        created = await executor.execute(
+            context, "document_create", {"title": "Scratch", "content": "draft"}, config=config
+        )
         deleted = await executor.execute(
             ToolExecutionContext(
                 tool_call_id=new_uuid7(),

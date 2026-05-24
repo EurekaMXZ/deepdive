@@ -1,24 +1,38 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
+from typing import Any, Protocol, cast
+from uuid import UUID
 
 from sqlalchemy import text
 
 from backend.config import SnapshotConfig, app_config_from_json
+from backend.db.connections import AsyncDbConnection
 from backend.events import EventEnvelope, EventType
 from backend.ids import new_uuid7
 from backend.snapshot.builder import GitSnapshotBuilder
-from backend.snapshot.models import SnapshotBuildError, SnapshotBuildRequest, SnapshotBuildResult, SnapshotBuilder, SnapshotPolicy
+from backend.snapshot.models import (
+    SnapshotBuilder,
+    SnapshotBuildError,
+    SnapshotBuildRequest,
+    SnapshotBuildResult,
+    SnapshotPolicy,
+)
 from backend.snapshot.repository import ExistingSnapshot, SnapshotRepository
 from backend.storage import InMemoryObjectStorage, ObjectStorage
+
+
+class SnapshotDatabase(Protocol):
+    def begin(self) -> AbstractAsyncContextManager[AsyncDbConnection]: ...
 
 
 class SnapshotService:
     def __init__(
         self,
         *,
-        database,
+        database: SnapshotDatabase,
         builder: SnapshotBuilder | None = None,
         storage: ObjectStorage | None = None,
         snapshot_config: SnapshotConfig | None = None,
@@ -38,6 +52,8 @@ class SnapshotService:
         requested_ref = event.payload.get("requested_ref")
         if not repository_url or not requested_ref:
             raise ValueError("SnapshotRequested requires repository_url and requested_ref")
+        repository_url = str(repository_url)
+        requested_ref = str(requested_ref)
 
         snapshot_id = new_uuid7()
         started = await self._mark_started(event, snapshot_id=snapshot_id)
@@ -72,7 +88,9 @@ class SnapshotService:
     async def _policy_for_event(self, event: EventEnvelope) -> SnapshotPolicy:
         config_snapshot_id = event.payload.get("config_snapshot_id")
         if not config_snapshot_id:
-            raise SnapshotConfigError("CONFIG_SNAPSHOT_REQUIRED", "SnapshotRequested event is missing config_snapshot_id.")
+            raise SnapshotConfigError(
+                "CONFIG_SNAPSHOT_REQUIRED", "SnapshotRequested event is missing config_snapshot_id."
+            )
         async with self._database.begin() as connection:
             result = await connection.execute(
                 text(
@@ -86,14 +104,20 @@ class SnapshotService:
             )
             row = result.mappings().first()
         if row is None:
-            raise SnapshotConfigError("CONFIG_SNAPSHOT_NOT_FOUND", f"Config snapshot does not exist: {config_snapshot_id}")
-        return SnapshotPolicy.from_config(app_config_from_json(row["config_json"]).snapshot)
+            raise SnapshotConfigError(
+                "CONFIG_SNAPSHOT_NOT_FOUND", f"Config snapshot does not exist: {config_snapshot_id}"
+            )
+        return SnapshotPolicy.from_config(app_config_from_json(cast(dict[str, Any], row["config_json"])).snapshot)
 
-    async def _mark_started(self, event: EventEnvelope, *, snapshot_id) -> bool:
+    async def _mark_started(self, event: EventEnvelope, *, snapshot_id: UUID) -> bool:
+        if event.analysis_id is None or event.agent_id is None:
+            raise ValueError("SnapshotStarted requires analysis_id and agent_id")
         now = datetime.now(UTC)
         async with self._database.begin() as connection:
             repository = SnapshotRepository(connection)
-            marked = await repository.mark_analysis_snapshotting(analysis_id=event.analysis_id, agent_id=event.agent_id, now=now)
+            marked = await repository.mark_analysis_snapshotting(
+                analysis_id=event.analysis_id, agent_id=event.agent_id, now=now
+            )
             if not marked:
                 return False
             await repository.add_outbox(
@@ -145,7 +169,9 @@ class SnapshotService:
                 reused_existing_snapshot=False,
             )
 
-    async def _reuse_existing(self, repository: SnapshotRepository, *, event: EventEnvelope, existing: ExistingSnapshot, now: datetime) -> None:
+    async def _reuse_existing(
+        self, repository: SnapshotRepository, *, event: EventEnvelope, existing: ExistingSnapshot, now: datetime
+    ) -> None:
         associated = await repository.associate_snapshot(event=event, snapshot_id=existing.id, now=now)
         if not associated:
             return
@@ -166,7 +192,7 @@ class SnapshotService:
         repository: SnapshotRepository,
         *,
         event: EventEnvelope,
-        snapshot_id,
+        snapshot_id: UUID,
         resolved_commit_sha: str,
         tree_sha: str,
         manifest_key: str | None,
@@ -197,7 +223,9 @@ class SnapshotService:
         now = datetime.now(UTC)
         async with self._database.begin() as connection:
             repository = SnapshotRepository(connection)
-            marked = await repository.mark_failed(event=event, error_code=error_code, error_message=error_message, now=now)
+            marked = await repository.mark_failed(
+                event=event, error_code=error_code, error_message=error_message, now=now
+            )
             if not marked:
                 return
             await repository.add_outbox(

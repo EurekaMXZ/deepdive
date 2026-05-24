@@ -28,8 +28,14 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(manifest_key(snapshot_id), f"snapshots/{snapshot_id}/manifest.json.zst")
         self.assertEqual(tree_text_key(snapshot_id), f"snapshots/{snapshot_id}/tree.txt")
         self.assertEqual(file_tree_key(snapshot_id), f"snapshots/{snapshot_id}/file-tree.json.zst")
-        self.assertEqual(blob_key(content_hash), "blobs/sha256/01/23/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-        self.assertEqual(instruction_key(snapshot_id, path_hash), f"instructions/{snapshot_id}/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210.md")
+        self.assertEqual(
+            blob_key(content_hash),
+            "blobs/sha256/01/23/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        self.assertEqual(
+            instruction_key(snapshot_id, path_hash),
+            f"instructions/{snapshot_id}/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210.md",
+        )
         self.assertEqual(tool_result_key(snapshot_id), f"tool-results/{snapshot_id}.json")
         self.assertEqual(evidence_key(snapshot_id), f"evidence/{snapshot_id}.txt")
 
@@ -42,8 +48,8 @@ class StorageTest(unittest.TestCase):
         self.assertEqual(storage.content_types["snapshots/example/tree.txt"], "text/plain")
 
     def test_in_memory_storage_put_file_streams_from_path(self) -> None:
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
 
         storage = InMemoryObjectStorage()
         with tempfile.TemporaryDirectory() as tmpdir:

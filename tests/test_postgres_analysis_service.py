@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import unittest
+from datetime import UTC, datetime
 
 from backend.api.services import PostgresAnalysisService
 from backend.config import AppConfig, OpenAIConfig
@@ -211,7 +211,7 @@ class FakeDatabase:
         self.begin_count = 0
         self.committed_count = 0
 
-    def begin(self) -> "FakeTransaction":
+    def begin(self) -> FakeTransaction:
         self.begin_count += 1
         return FakeTransaction(self)
 
@@ -220,7 +220,7 @@ class FakeTransaction:
     def __init__(self, database: FakeDatabase) -> None:
         self._database = database
 
-    async def __aenter__(self) -> "FakeConnection":
+    async def __aenter__(self) -> FakeConnection:
         return self._database.connection
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
@@ -250,7 +250,7 @@ class FakeResult:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def all(self) -> list[dict]:

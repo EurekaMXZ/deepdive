@@ -7,12 +7,12 @@ from uuid import UUID
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
-from backend.db.connections import connection_from
+from backend.db.connections import AsyncDbConnection, ConnectionSource, connection_from
 from backend.ids import new_uuid7
 
 
 class AgentStreamStore:
-    def __init__(self, connection_or_database) -> None:
+    def __init__(self, connection_or_database: ConnectionSource) -> None:
         self._connection_or_database = connection_or_database
 
     def _connection(self):
@@ -45,7 +45,7 @@ class AgentStreamStore:
 
 
 async def add_stream_event_on_connection(
-    connection,
+    connection: AsyncDbConnection,
     *,
     analysis_id: UUID,
     agent_id: UUID,

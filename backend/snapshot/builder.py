@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 from backend.snapshot.git_cli import GitCommandRunner
 from backend.snapshot.hashing import sha256_text
@@ -29,7 +29,9 @@ class GitSnapshotBuilder:
             bundle_path = tmp_path / "snapshot.bundle"
 
             self._git.clone_mirror(request.repository_url, mirror, timeout_seconds=request.timeout_seconds)
-            resolved_commit_sha = self._git.resolve_commit(mirror, request.requested_ref, timeout_seconds=request.timeout_seconds)
+            resolved_commit_sha = self._git.resolve_commit(
+                mirror, request.requested_ref, timeout_seconds=request.timeout_seconds
+            )
             tree_sha = self._git.resolve_tree(mirror, resolved_commit_sha, timeout_seconds=request.timeout_seconds)
             tree_entries = self._git.list_tree(mirror, resolved_commit_sha, timeout_seconds=request.timeout_seconds)
             self._git.create_bundle(mirror, resolved_commit_sha, bundle_path, timeout_seconds=request.timeout_seconds)
@@ -70,8 +72,12 @@ class GitSnapshotBuilder:
                 instructions=instructions,
             )
             request.storage.put_file(result.git_bundle_key, bundle_path, content_type="application/octet-stream")
-            request.storage.put_bytes(result.tree_text_key, tree_text(files).encode(), content_type="text/plain; charset=utf-8")
-            request.storage.put_bytes(result.file_tree_key, zstd_json_bytes(file_tree_json(files)), content_type="application/json+zstd")
+            request.storage.put_bytes(
+                result.tree_text_key, tree_text(files).encode(), content_type="text/plain; charset=utf-8"
+            )
+            request.storage.put_bytes(
+                result.file_tree_key, zstd_json_bytes(file_tree_json(files)), content_type="application/json+zstd"
+            )
             request.storage.put_bytes(
                 result.manifest_key,
                 zstd_json_bytes(manifest_json(result=result, policy=request.policy, instructions=instructions)),

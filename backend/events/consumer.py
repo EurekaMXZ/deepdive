@@ -11,23 +11,21 @@ from backend.events.publisher import EventPublisher
 
 
 class ProcessedEventRepository(Protocol):
-    async def is_processed(self, event_id: UUID, consumer_name: str) -> bool:
-        ...
+    async def is_processed(self, event_id: UUID, consumer_name: str) -> bool: ...
 
-    async def mark_processed(self, event_id: UUID, consumer_name: str, claim_owner: str | None = None) -> None:
-        ...
+    async def mark_processed(self, event_id: UUID, consumer_name: str, claim_owner: str | None = None) -> bool: ...
 
-    async def claim_processing(self, event_id: UUID, consumer_name: str) -> str | None:
-        ...
+    async def claim_processing(self, event_id: UUID, consumer_name: str) -> str | None: ...
 
-    async def release_processing_claim(self, event_id: UUID, consumer_name: str, claim_owner: str | None = None) -> None:
-        ...
+    async def release_processing_claim(
+        self, event_id: UUID, consumer_name: str, claim_owner: str | None = None
+    ) -> None: ...
 
-    async def renew_processing_claim(self, event_id: UUID, consumer_name: str, claim_owner: str) -> bool:
-        ...
+    async def renew_processing_claim(self, event_id: UUID, consumer_name: str, claim_owner: str) -> bool: ...
 
 
 EventHandler = Callable[[EventEnvelope], Awaitable[None]]
+RenewProcessingClaim = Callable[[UUID, str, str], Awaitable[bool]]
 MessageHandleResult = Literal["handled", "skipped_processed", "deferred", "failed_requeued"]
 
 
@@ -54,28 +52,20 @@ class EventConsumerRunner:
     async def handle_message(self, message: ConsumedKafkaMessage) -> MessageHandleResult:
         event = EventEnvelope.from_json(message.value.decode())
         claim_owner: str | None = None
-        claim_processing = getattr(self._processed_events, "claim_processing", None)
-        if claim_processing is not None:
-            if await self._processed_events.is_processed(event.event_id, self._consumer_name):
-                return "skipped_processed"
-            claim_result = await claim_processing(event.event_id, self._consumer_name)
-            if claim_result is True:
-                claim_owner = None
-            elif claim_result:
-                claim_owner = str(claim_result)
-            else:
-                return "deferred"
-        elif await self._processed_events.is_processed(event.event_id, self._consumer_name):
+        if await self._processed_events.is_processed(event.event_id, self._consumer_name):
             return "skipped_processed"
+        claim_result = await self._processed_events.claim_processing(event.event_id, self._consumer_name)
+        if claim_result:
+            claim_owner = claim_result
+        else:
+            return "deferred"
 
         heartbeat_task = self._start_heartbeat(event_id=event.event_id, claim_owner=claim_owner)
         try:
             await self._handler(event)
         except asyncio.CancelledError:
             await self._stop_heartbeat(heartbeat_task)
-            release_processing_claim = getattr(self._processed_events, "release_processing_claim", None)
-            if release_processing_claim is not None:
-                await release_processing_claim(event.event_id, self._consumer_name, claim_owner)
+            await self._processed_events.release_processing_claim(event.event_id, self._consumer_name, claim_owner)
             raise
         except Exception as exc:
             await self._stop_heartbeat(heartbeat_task)
@@ -85,9 +75,7 @@ class EventConsumerRunner:
                 else:
                     await self._publish_dlq(event, exc)
             finally:
-                release_processing_claim = getattr(self._processed_events, "release_processing_claim", None)
-                if release_processing_claim is not None:
-                    await release_processing_claim(event.event_id, self._consumer_name, claim_owner)
+                await self._processed_events.release_processing_claim(event.event_id, self._consumer_name, claim_owner)
             return "failed_requeued"
 
         await self._stop_heartbeat(heartbeat_task)
@@ -96,19 +84,18 @@ class EventConsumerRunner:
             raise RuntimeError(f"Event {event.event_id} processing claim was lost before mark_processed")
         return "handled"
 
-    def _start_heartbeat(self, *, event_id: UUID, claim_owner: str | None):
-        renew = getattr(self._processed_events, "renew_processing_claim", None)
-        if renew is None or not claim_owner:
+    def _start_heartbeat(self, *, event_id: UUID, claim_owner: str | None) -> asyncio.Task[None] | None:
+        if not claim_owner:
             return None
         return asyncio.create_task(
             self._heartbeat_claim(
                 event_id=event_id,
                 claim_owner=claim_owner,
-                renew=renew,
+                renew=self._processed_events.renew_processing_claim,
             )
         )
 
-    async def _stop_heartbeat(self, task) -> None:
+    async def _stop_heartbeat(self, task: asyncio.Task[None] | None) -> None:
         if task is None:
             return
         task.cancel()
@@ -117,7 +104,7 @@ class EventConsumerRunner:
         except asyncio.CancelledError:
             return
 
-    async def _heartbeat_claim(self, *, event_id: UUID, claim_owner: str, renew) -> None:
+    async def _heartbeat_claim(self, *, event_id: UUID, claim_owner: str, renew: RenewProcessingClaim) -> None:
         while True:
             if self._heartbeat_interval_seconds > 0:
                 await asyncio.sleep(self._heartbeat_interval_seconds)

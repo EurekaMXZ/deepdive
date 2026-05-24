@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 from backend.config import SnapshotConfig, load_dotenv_if_exists
 from backend.db.runtime import create_database
@@ -57,7 +57,10 @@ def load_snapshot_worker_settings() -> SnapshotWorkerSettings:
         error_backoff_seconds=float(os.environ.get("SNAPSHOT_WORKER_ERROR_BACKOFF_SECONDS", "5")),
         max_attempts=int(os.environ.get("SNAPSHOT_WORKER_MAX_ATTEMPTS", os.environ.get("WORKER_MAX_ATTEMPTS", "3"))),
         event_heartbeat_interval_seconds=float(
-            os.environ.get("SNAPSHOT_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"))
+            os.environ.get(
+                "SNAPSHOT_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS",
+                os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"),
+            )
         ),
     )
 

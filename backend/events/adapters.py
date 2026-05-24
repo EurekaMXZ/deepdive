@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol, cast
+
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from backend.events.messages import ConsumedKafkaMessage
 
 
+class KafkaConsumerRecord(Protocol):
+    topic: str
+    key: bytes | None
+    value: bytes | None
+    partition: int
+    offset: int
+
+
+KafkaSendAndWait = Callable[..., Awaitable[object]]
+KafkaCommit = Callable[[], Awaitable[None]]
+KafkaNextMessage = Callable[[], Awaitable[KafkaConsumerRecord]]
+
+
 class AiokafkaEventProducer:
     def __init__(self, *, bootstrap_servers: str) -> None:
-        self._producer = AIOKafkaProducer(bootstrap_servers=bootstrap_servers)
+        self._producer: Any = AIOKafkaProducer(bootstrap_servers=bootstrap_servers)
 
     async def start(self) -> None:
         await self._producer.start()
@@ -16,7 +32,8 @@ class AiokafkaEventProducer:
         await self._producer.stop()
 
     async def send_and_wait(self, topic: str, *, key: bytes, value: bytes) -> object:
-        return await self._producer.send_and_wait(topic, value=value, key=key)
+        send_and_wait = cast(KafkaSendAndWait, self._producer.send_and_wait)
+        return await send_and_wait(topic, value=value, key=key)
 
 
 class AiokafkaEventConsumer:
@@ -28,7 +45,7 @@ class AiokafkaEventConsumer:
         enable_auto_commit: bool = False,
         auto_offset_reset: str = "earliest",
     ) -> None:
-        self._consumer = AIOKafkaConsumer(
+        self._consumer: Any = AIOKafkaConsumer(
             *topics,
             bootstrap_servers=bootstrap_servers,
             group_id=group_id,
@@ -43,24 +60,27 @@ class AiokafkaEventConsumer:
         await self._consumer.stop()
 
     async def commit(self) -> None:
-        await self._consumer.commit()
+        commit = cast(KafkaCommit, self._consumer.commit)
+        await commit()
 
     async def defer(self, message: ConsumedKafkaMessage) -> None:
         if message.partition is None or message.offset is None:
             return
         from aiokafka import TopicPartition
 
-        self._consumer.seek(TopicPartition(message.topic, message.partition), message.offset)
+        seek = cast(Callable[[Any, int], None], self._consumer.seek)
+        seek(TopicPartition(message.topic, message.partition), message.offset)
 
-    def __aiter__(self) -> "AiokafkaEventConsumer":
+    def __aiter__(self) -> AiokafkaEventConsumer:
         return self
 
     async def __anext__(self) -> ConsumedKafkaMessage:
-        message = await self._consumer.__anext__()
+        next_message = cast(KafkaNextMessage, self._consumer.__anext__)
+        message = await next_message()
         return ConsumedKafkaMessage(
             topic=message.topic,
             key=message.key,
-            value=message.value,
+            value=message.value or b"",
             partition=message.partition,
             offset=message.offset,
         )

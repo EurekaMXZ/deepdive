@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import UUID
 
-from sqlalchemy import bindparam
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
+from backend.db.connections import AsyncDbConnection
 from backend.events import EventEnvelope, EventType
 from backend.events.repositories import DbOutboxSink
 from backend.ids import new_uuid7
 
 
 class AnalysisCommandHandler:
-    def __init__(self, connection) -> None:
+    def __init__(self, connection: AsyncDbConnection) -> None:
         self._connection = connection
 
     async def __call__(self, event: EventEnvelope) -> None:
@@ -154,7 +155,7 @@ class AnalysisCommandHandler:
             )
         )
 
-    async def _add_cancelled_stream_events(self, *, analysis_id, agent_id, now: datetime) -> None:
+    async def _add_cancelled_stream_events(self, *, analysis_id: UUID, agent_id: UUID, now: datetime) -> None:
         await self._connection.scalar(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:analysis_id, 0))"),
             {"analysis_id": str(analysis_id)},

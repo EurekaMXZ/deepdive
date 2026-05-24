@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 TERMINAL_ANALYSIS_STATUSES = frozenset({"completed", "failed", "cancelled"})
 TERMINAL_STREAM_EVENT_TYPES = frozenset({"done", "analysis_error", "error"})
 
@@ -16,4 +15,3 @@ def error_event_payload(*, code: str, message: str, retryable: bool | None = Non
     if retryable is not None:
         error["retryable"] = retryable
     return {"error": error}
-

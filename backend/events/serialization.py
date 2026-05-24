@@ -8,4 +8,3 @@ def outbox_payload(event: EventEnvelope) -> dict[str, object]:
         "event_type": event.event_type.value,
         "payload_json": event.to_dict(),
     }
-

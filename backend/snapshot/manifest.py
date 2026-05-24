@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
+from compression import zstd
 from dataclasses import asdict
 from datetime import UTC, datetime
-
-from compression import zstd
 
 from backend.snapshot.models import SnapshotBuildResult, SnapshotFileRecord, SnapshotInstructionRecord, SnapshotPolicy
 

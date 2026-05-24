@@ -108,7 +108,9 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
             snapshot_id=new_uuid7(),
         )
         database = FakeDatabase()
-        consumer = FakeConsumer([ConsumedKafkaMessage(topic="deepdive.agent.commands", key=b"k", value=event.to_json().encode())])
+        consumer = FakeConsumer(
+            [ConsumedKafkaMessage(topic="deepdive.agent.commands", key=b"k", value=event.to_json().encode())]
+        )
 
         def fake_producer(*, bootstrap_servers):
             producer = FakeProducer(bootstrap_servers=bootstrap_servers)

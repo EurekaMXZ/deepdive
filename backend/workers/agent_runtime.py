@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 from backend.agent import AgentCommandHandler, ContextAssembler
 from backend.agent.openai_runner import create_openai_responses_runner
@@ -12,7 +12,6 @@ from backend.events.kafka import AiokafkaEventConsumer, AiokafkaEventProducer
 from backend.events.runtime import run_consumer_forever, run_consumer_once
 from backend.storage import DEFAULT_OBJECT_BUCKET, MinioObjectStorage
 from backend.workers.asyncio_compat import run_async_worker
-from backend.workers.snapshot_runtime import _bool_env
 
 
 @dataclass(frozen=True)
@@ -66,7 +65,10 @@ def load_agent_worker_settings() -> AgentWorkerSettings:
         error_backoff_seconds=float(os.environ.get("AGENT_WORKER_ERROR_BACKOFF_SECONDS", "5")),
         max_attempts=int(os.environ.get("AGENT_WORKER_MAX_ATTEMPTS", os.environ.get("WORKER_MAX_ATTEMPTS", "3"))),
         event_heartbeat_interval_seconds=float(
-            os.environ.get("AGENT_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"))
+            os.environ.get(
+                "AGENT_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS",
+                os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"),
+            )
         ),
     )
 
@@ -191,6 +193,10 @@ def _optional_float_env(value: str | None) -> float | None:
     if value is None or not value.strip():
         return None
     return float(value)
+
+
+def _bool_env(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 if __name__ == "__main__":

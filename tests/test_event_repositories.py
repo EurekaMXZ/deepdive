@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from uuid import UUID
 
 from backend.events import EventEnvelope, EventType
 from backend.events.repositories import DbOutboxSink, SqlOutboxRepository, SqlProcessedEventRepository
@@ -187,7 +186,7 @@ class FakeResult:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def all(self) -> list[dict]:

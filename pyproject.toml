@@ -17,4 +17,47 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "pyright>=1.1.407",
+    "pytest>=9.0.0",
+    "ruff>=0.14.0",
 ]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+src = ["backend", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "ASYNC",
+    "C4",
+    "SIM",
+    "PIE",
+    "RUF",
+]
+ignore = [
+    "E501",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.pyright]
+include = ["backend"]
+exclude = [
+    "**/__pycache__",
+    ".venv",
+    ".git",
+    "build",
+    "dist",
+]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = "none"

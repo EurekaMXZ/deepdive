@@ -5,8 +5,13 @@ import os
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BufferedRandom
 from pathlib import Path
+from types import TracebackType
+from typing import Any, TypedDict, cast
 from uuid import UUID
+
+from backend.config import CacheConfig
 
 
 @dataclass(frozen=True)
@@ -14,6 +19,18 @@ class CacheCoverage:
     prefix: str
     file_count: int
     bytes: int
+
+
+class CoveragePrefix(TypedDict):
+    prefix: str
+    completed_at: str
+    file_count: int
+    bytes: int
+
+
+class CoverageFile(TypedDict):
+    snapshot_id: str
+    prefixes: list[CoveragePrefix]
 
 
 class LocalSourceCache:
@@ -35,15 +52,15 @@ class LocalSourceCache:
 
     def is_prefix_covered(self, snapshot_id: UUID, prefix: str) -> bool:
         target = normalize_prefix(prefix)
-        for entry in self._read_coverage(snapshot_id).get("prefixes", []):
-            covered = normalize_prefix(entry.get("prefix", ""))
+        for entry in self._read_coverage(snapshot_id)["prefixes"]:
+            covered = normalize_prefix(entry["prefix"])
             if target == covered or target.startswith(covered):
                 return True
         return False
 
     def mark_prefix_covered(self, snapshot_id: UUID, *, prefix: str, file_count: int, bytes_written: int) -> None:
         coverage = self._read_coverage(snapshot_id)
-        prefixes = coverage.setdefault("prefixes", [])
+        prefixes = coverage["prefixes"]
         normalized_prefix = normalize_prefix(prefix)
         prefixes.append(
             {
@@ -69,7 +86,7 @@ class LocalSourceCache:
         tmp.replace(target)
         return target
 
-    def cleanup(self, config) -> dict[str, int]:
+    def cleanup(self, config: CacheConfig) -> dict[str, int]:
         snapshots_root = self._root_dir / "snapshots"
         if not snapshots_root.is_dir():
             return {"removed_snapshots": 0, "removed_bytes": 0}
@@ -114,13 +131,31 @@ class LocalSourceCache:
     def _coverage_path(self, snapshot_id: UUID) -> Path:
         return self.snapshot_root(snapshot_id) / "coverage.json"
 
-    def _read_coverage(self, snapshot_id: UUID) -> dict:
+    def _read_coverage(self, snapshot_id: UUID) -> CoverageFile:
         path = self._coverage_path(snapshot_id)
         if not path.is_file():
             return {"snapshot_id": str(snapshot_id), "prefixes": []}
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return {"snapshot_id": str(snapshot_id), "prefixes": []}
+        payload = cast(dict[str, Any], payload)
+        raw_prefixes = payload.get("prefixes")
+        prefixes: list[CoveragePrefix] = []
+        if isinstance(raw_prefixes, list):
+            for item in cast(list[Any], raw_prefixes):
+                if isinstance(item, dict):
+                    item = cast(dict[str, Any], item)
+                    prefixes.append(
+                        {
+                            "prefix": str(item.get("prefix") or ""),
+                            "completed_at": str(item.get("completed_at") or ""),
+                            "file_count": int(item.get("file_count") or 0),
+                            "bytes": int(item.get("bytes") or 0),
+                        }
+                    )
+        return {"snapshot_id": str(payload.get("snapshot_id") or snapshot_id), "prefixes": prefixes}
 
-    def _write_coverage(self, snapshot_id: UUID, coverage: dict) -> None:
+    def _write_coverage(self, snapshot_id: UUID, coverage: CoverageFile) -> None:
         path = self._coverage_path(snapshot_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
@@ -131,16 +166,21 @@ class LocalSourceCache:
 class FileLock:
     def __init__(self, path: Path) -> None:
         self._path = path
-        self._handle = None
+        self._handle: BufferedRandom | None = None
 
-    def __enter__(self):
+    def __enter__(self) -> FileLock:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         handle = self._path.open("a+b")
         _lock_file(handle)
         self._handle = handle
         return self
 
-    def __exit__(self, exc_type, exc, traceback) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         handle = self._handle
         self._handle = None
         if handle is None:
@@ -154,21 +194,21 @@ class FileLock:
 if os.name == "nt":
     import msvcrt
 
-    def _lock_file(handle) -> None:
+    def _lock_file(handle: BufferedRandom) -> None:
         handle.seek(0)
         msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
 
-    def _unlock_file(handle) -> None:
+    def _unlock_file(handle: BufferedRandom) -> None:
         handle.seek(0)
         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 else:
     import fcntl
 
-    def _lock_file(handle) -> None:
+    def _lock_file(handle: BufferedRandom) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
 
-    def _unlock_file(handle) -> None:
+    def _unlock_file(handle: BufferedRandom) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
@@ -202,12 +242,7 @@ def _is_unsafe_repo_path_part(part: str) -> bool:
         *(f"lpt{i}" for i in range(1, 10)),
     }
     device_name = part.split(".", 1)[0].lower()
-    return (
-        part == ".."
-        or ":" in part
-        or part.startswith("//")
-        or device_name in reserved_devices
-    )
+    return part == ".." or ":" in part or part.startswith("//") or device_name in reserved_devices
 
 
 def _ensure_within_root(root: Path, target: Path) -> None:

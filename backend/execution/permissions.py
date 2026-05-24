@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
-import hashlib
 from typing import Any
 
 from backend.config import ToolsConfig
-from backend.security import is_secret_path
 from backend.execution.tool_registry import ToolCapability, ToolDefinition, ToolRegistry
-
+from backend.security import is_secret_path
 
 DEFAULT_TOOL_POLICY_VERSION = "analysis-tool-permissions-v2"
 DEFAULT_TOOL_POLICY_HASH = "sha256:" + hashlib.sha256(DEFAULT_TOOL_POLICY_VERSION.encode()).hexdigest()
@@ -33,10 +32,14 @@ class PermissionResult:
 
 
 class PermissionEngine:
-    def evaluate(self, *, tool_name: str, arguments: dict[str, Any], tools_config: ToolsConfig | None = None) -> PermissionDecision:
+    def evaluate(
+        self, *, tool_name: str, arguments: dict[str, Any], tools_config: ToolsConfig | None = None
+    ) -> PermissionDecision:
         return self.evaluate_result(tool_name=tool_name, arguments=arguments, tools_config=tools_config).decision
 
-    def evaluate_result(self, *, tool_name: str, arguments: dict[str, Any], tools_config: ToolsConfig | None = None) -> PermissionResult:
+    def evaluate_result(
+        self, *, tool_name: str, arguments: dict[str, Any], tools_config: ToolsConfig | None = None
+    ) -> PermissionResult:
         registry = ToolRegistry.from_config(tools_config or ToolsConfig())
         definitions = {tool.name: tool for tool in registry.tools}
         tool = definitions.get(tool_name)
@@ -48,12 +51,16 @@ class PermissionEngine:
             if isinstance(path, str) and _is_unsafe_path(path):
                 return _tool_result(tool, PermissionDecision.DENY, "UNSAFE_PATH", f"Unsafe repository path in {name}.")
             if isinstance(path, str) and is_secret_path(path):
-                return _tool_result(tool, PermissionDecision.DENY, "SECRET_PATH_DENIED", f"Secret path denied in {name}.")
+                return _tool_result(
+                    tool, PermissionDecision.DENY, "SECRET_PATH_DENIED", f"Secret path denied in {name}."
+                )
 
         return _tool_result(tool, PermissionDecision.ALLOW, "ALLOWED", "Tool call is allowed.")
 
 
-def _tool_result(tool: ToolDefinition, decision: PermissionDecision, reason_code: str, message: str) -> PermissionResult:
+def _tool_result(
+    tool: ToolDefinition, decision: PermissionDecision, reason_code: str, message: str
+) -> PermissionResult:
     return PermissionResult(
         decision,
         reason_code,
@@ -68,14 +75,10 @@ def _tool_result(tool: ToolDefinition, decision: PermissionDecision, reason_code
 def _is_unsafe_path(path: str) -> bool:
     normalized = path.replace("\\", "/")
     return (
-        normalized.startswith("/")
-        or normalized.startswith("//")
-        or normalized.startswith("~")
+        normalized.startswith(("/", "//", "~", ".git/", "../"))
         or ":" in normalized
-        or normalized.startswith(".git/")
         or normalized == ".git"
         or normalized == ".."
-        or normalized.startswith("../")
         or "/../" in normalized
         or normalized.endswith("/..")
     )

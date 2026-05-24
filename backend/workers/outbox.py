@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 from backend.config import load_dotenv_if_exists
 from backend.db.runtime import create_database
@@ -27,7 +27,9 @@ def load_worker_settings() -> WorkerSettings:
         database_url=os.environ["DATABASE_URL"],
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
         batch_size=int(os.environ.get("OUTBOX_BATCH_SIZE", "100")),
-        run_forever=_bool_env(os.environ.get("OUTBOX_RUN_FOREVER", os.environ.get("OUTBOX_WORKER_RUN_FOREVER", "true"))),
+        run_forever=_bool_env(
+            os.environ.get("OUTBOX_RUN_FOREVER", os.environ.get("OUTBOX_WORKER_RUN_FOREVER", "true"))
+        ),
         idle_sleep_seconds=float(os.environ.get("OUTBOX_IDLE_SLEEP_SECONDS", "1")),
         error_backoff_seconds=float(os.environ.get("OUTBOX_ERROR_BACKOFF_SECONDS", "5")),
     )
@@ -54,6 +56,7 @@ async def publish_forever(settings: WorkerSettings) -> None:
     producer = AiokafkaEventProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
     await producer.start()
     try:
+
         async def publish_batch() -> int:
             async with database.begin() as connection:
                 return await publish_outbox_once(

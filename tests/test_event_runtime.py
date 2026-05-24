@@ -7,7 +7,8 @@ from backend.events import EventEnvelope, EventType
 from backend.events.kafka import ConsumedKafkaMessage
 from backend.events.runtime import publish_outbox_once, run_consumer_forever, run_consumer_once
 from backend.ids import new_uuid7
-from tests.test_kafka_events import FakeEventHandler, FakeKafkaConsumer, FakeKafkaProducer, FakeProcessedEventRepository
+
+from tests.test_kafka_events import FakeEventHandler, FakeKafkaConsumer, FakeKafkaProducer
 
 
 class EventRuntimeTest(unittest.IsolatedAsyncioTestCase):
@@ -151,7 +152,7 @@ class FakeResult:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def mappings(self) -> "FakeResult":
+    def mappings(self) -> FakeResult:
         return self
 
     def all(self) -> list[dict]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -16,11 +18,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-
 metadata = MetaData()
 
 
-def uuid_pk() -> Column:
+def uuid_pk() -> Column[Any]:
     return Column("id", UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()"))
 
 
@@ -241,7 +242,12 @@ document_revisions = Table(
     Column("size_bytes", BigInteger, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
-Index("uq_document_revisions_document_version", document_revisions.c.document_id, document_revisions.c.version, unique=True)
+Index(
+    "uq_document_revisions_document_version",
+    document_revisions.c.document_id,
+    document_revisions.c.version,
+    unique=True,
+)
 Index("uq_document_revisions_tool_call", document_revisions.c.tool_call_id, unique=True)
 
 

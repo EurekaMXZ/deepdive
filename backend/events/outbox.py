@@ -15,11 +15,9 @@ class OutboxEvent:
 
 
 class OutboxRepository(Protocol):
-    async def fetch_unpublished(self, *, limit: int) -> list[OutboxEvent]:
-        ...
+    async def fetch_unpublished(self, *, limit: int) -> list[OutboxEvent]: ...
 
-    async def mark_published(self, outbox_id: UUID) -> None:
-        ...
+    async def mark_published(self, outbox_id: UUID) -> None: ...
 
 
 class OutboxPublisher:
