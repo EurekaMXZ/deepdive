@@ -54,6 +54,19 @@ CREATE TABLE user_credentials (
     updated_at timestamptz not null
 );
 
+CREATE TABLE oauth_accounts (
+    id uuid primary key default uuidv7(),
+    tenant_id uuid not null references tenants(id),
+    user_id uuid not null references users(id),
+    provider text not null,
+    provider_account_id text not null,
+    provider_login text,
+    provider_email text not null,
+    provider_email_verified boolean not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+);
+
 CREATE TABLE refresh_tokens (
     id uuid primary key default uuidv7(),
     user_id uuid not null references users(id),
@@ -352,6 +365,15 @@ CREATE INDEX ix_users_tenant_created_at
 
 CREATE UNIQUE INDEX uq_user_credentials_user_id
     ON user_credentials (user_id);
+
+CREATE UNIQUE INDEX uq_oauth_accounts_provider_account
+    ON oauth_accounts (provider, provider_account_id);
+
+CREATE UNIQUE INDEX uq_oauth_accounts_provider_tenant_email
+    ON oauth_accounts (provider, tenant_id, provider_email);
+
+CREATE INDEX ix_oauth_accounts_user_provider
+    ON oauth_accounts (user_id, provider);
 
 CREATE UNIQUE INDEX uq_refresh_tokens_token_hash
     ON refresh_tokens (token_hash);

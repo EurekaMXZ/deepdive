@@ -87,6 +87,33 @@ user_credentials = Table(
 Index("uq_user_credentials_user_id", user_credentials.c.user_id, unique=True)
 
 
+oauth_accounts = Table(
+    "oauth_accounts",
+    metadata,
+    uuid_pk(),
+    Column("tenant_id", UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False),
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id"), nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("provider_account_id", Text, nullable=False),
+    Column("provider_login", Text),
+    Column("provider_email", Text, nullable=False),
+    Column("provider_email_verified", Boolean, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index(
+    "uq_oauth_accounts_provider_account", oauth_accounts.c.provider, oauth_accounts.c.provider_account_id, unique=True
+)
+Index(
+    "uq_oauth_accounts_provider_tenant_email",
+    oauth_accounts.c.provider,
+    oauth_accounts.c.tenant_id,
+    oauth_accounts.c.provider_email,
+    unique=True,
+)
+Index("ix_oauth_accounts_user_provider", oauth_accounts.c.user_id, oauth_accounts.c.provider)
+
+
 refresh_tokens = Table(
     "refresh_tokens",
     metadata,

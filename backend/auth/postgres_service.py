@@ -44,6 +44,12 @@ class PostgresAuthService:
             raise AuthError("INVALID_CREDENTIALS", "Email or password is incorrect.")
         return self._issue_tokens(user)
 
+    async def exchange_code(self, user_id: UUID) -> TokenPair:
+        user = await self._repository.get_user(user_id)
+        if user is None or not user.is_active:
+            raise AuthError("INVALID_OAUTH_CODE", "OAuth exchange code is invalid or expired.")
+        return self._issue_tokens(user)
+
     async def refresh(self, refresh_token: str) -> TokenPair:
         user_id_text = self._refresh_token_store.pop(token_hash(refresh_token))
         if user_id_text is None:
@@ -106,6 +112,42 @@ class PostgresAuthService:
             display_name=display_name,
             role_names=names,
         )
+
+    async def login_or_register_external_user(
+        self,
+        *,
+        provider: str,
+        provider_account_id: str,
+        provider_login: str | None,
+        email: str,
+        email_verified: bool,
+        display_name: str | None = None,
+    ) -> UserRecord:
+        await self._repository.ensure_seed_data()
+        normalized_email = normalize_email(email)
+        user = await self._repository.get_user_by_external_identity(provider, provider_account_id)
+        if user is not None:
+            if not user.is_active:
+                raise AuthError("INVALID_CREDENTIALS", "Email or password is incorrect.")
+            return user
+
+        user_by_email = await self._repository.get_user_by_email(normalized_email)
+        if user_by_email is None:
+            role_name = "admin" if not await self._repository.has_users() else "member"
+            user_by_email = await self._repository.create_user_without_password(
+                email=normalized_email,
+                display_name=display_name,
+                role_names=[role_name],
+            )
+        await self._repository.link_external_identity(
+            user_id=user_by_email.id,
+            provider=provider,
+            provider_account_id=provider_account_id,
+            provider_login=provider_login,
+            provider_email=normalized_email,
+            provider_email_verified=email_verified,
+        )
+        return user_by_email
 
     async def update_user(
         self,

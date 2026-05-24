@@ -47,3 +47,13 @@ class TokenPair:
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int = 1800
+
+
+@dataclass(frozen=True)
+class ExternalIdentityRecord:
+    user_id: UUID
+    provider: str
+    provider_account_id: str
+    provider_login: str | None
+    provider_email: str
+    provider_email_verified: bool

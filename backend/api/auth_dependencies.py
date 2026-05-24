@@ -22,6 +22,19 @@ class AuthService(Protocol):
 
     def logout(self, refresh_token: str) -> None | Awaitable[None]: ...
 
+    def exchange_code(self, user_id: UUID) -> TokenPair | Awaitable[TokenPair]: ...
+
+    def login_or_register_external_user(
+        self,
+        *,
+        provider: str,
+        provider_account_id: str,
+        provider_login: str | None,
+        email: str,
+        email_verified: bool,
+        display_name: str | None = None,
+    ) -> UserRecord | Awaitable[UserRecord]: ...
+
     def current_user(self, access_token: str) -> CurrentUser | Awaitable[CurrentUser]: ...
 
     def list_users(self) -> list[UserRecord] | Awaitable[list[UserRecord]]: ...

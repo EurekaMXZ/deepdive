@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from backend.auth.jwt import JwtError, decode_jwt, encode_jwt
-from backend.auth.models import CurrentUser, PermissionRecord, RoleRecord, TokenPair, UserRecord
+from backend.auth.models import CurrentUser, ExternalIdentityRecord, PermissionRecord, RoleRecord, TokenPair, UserRecord
 from backend.auth.passwords import hash_password, verify_password
 from backend.auth.tokens import InMemoryRefreshTokenStore, RefreshTokenStore
 from backend.ids import new_uuid7
@@ -74,6 +74,7 @@ class InMemoryAuthService:
         }
         self._users: dict[UUID, UserRecord] = {}
         self._password_hashes: dict[UUID, str] = {}
+        self._external_identities: dict[tuple[str, str], ExternalIdentityRecord] = {}
 
     def register(self, *, email: str, password: str, display_name: str | None = None) -> UserRecord:
         normalized_email = normalize_email(email)
@@ -86,7 +87,12 @@ class InMemoryAuthService:
 
     def login(self, *, email: str, password: str) -> TokenPair:
         user = self._user_by_email(normalize_email(email))
-        if user is None or not user.is_active or not verify_password(password, self._password_hashes[user.id]):
+        if (
+            user is None
+            or not user.is_active
+            or user.id not in self._password_hashes
+            or not verify_password(password, self._password_hashes[user.id])
+        ):
             raise AuthError("INVALID_CREDENTIALS", "Email or password is incorrect.")
         return self._issue_tokens(user)
 
@@ -102,6 +108,12 @@ class InMemoryAuthService:
         user = self._users.get(user_id)
         if user is None or not user.is_active:
             raise AuthError("INVALID_REFRESH_TOKEN", "Refresh token is invalid.")
+        return self._issue_tokens(user)
+
+    def exchange_code(self, user_id: UUID) -> TokenPair:
+        user = self._users.get(user_id)
+        if user is None or not user.is_active:
+            raise AuthError("INVALID_OAUTH_CODE", "OAuth exchange code is invalid or expired.")
         return self._issue_tokens(user)
 
     def logout(self, refresh_token: str) -> None:
@@ -155,6 +167,67 @@ class InMemoryAuthService:
         )
         self._users[user.id] = user
         self._password_hashes[user.id] = hash_password(password)
+        return user
+
+    def login_or_register_external_user(
+        self,
+        *,
+        provider: str,
+        provider_account_id: str,
+        provider_login: str | None,
+        email: str,
+        email_verified: bool,
+        display_name: str | None = None,
+    ) -> UserRecord:
+        normalized_email = normalize_email(email)
+        identity = self._external_identities.get((provider, provider_account_id))
+        if identity is not None:
+            user = self._users.get(identity.user_id)
+            if user is None or not user.is_active:
+                raise AuthError("INVALID_CREDENTIALS", "Email or password is incorrect.")
+            return user
+
+        user = self._user_by_email(normalized_email)
+        if user is None:
+            role_name = "admin" if not self._users else "member"
+            user = self.create_user_without_password(
+                email=normalized_email,
+                display_name=display_name,
+                role_names=[role_name],
+            )
+        self._external_identities[(provider, provider_account_id)] = ExternalIdentityRecord(
+            user_id=user.id,
+            provider=provider,
+            provider_account_id=provider_account_id,
+            provider_login=provider_login,
+            provider_email=normalized_email,
+            provider_email_verified=email_verified,
+        )
+        return user
+
+    def create_user_without_password(
+        self,
+        *,
+        email: str,
+        display_name: str | None = None,
+        role_names: list[str] | None = None,
+    ) -> UserRecord:
+        normalized_email = normalize_email(email)
+        if self._user_by_email(normalized_email) is not None:
+            raise AuthError("USER_ALREADY_EXISTS", "A user with this email already exists.")
+        roles = self._roles_by_names(role_names or ["member"])
+        now = datetime.now(UTC)
+        user = UserRecord(
+            id=new_uuid7(),
+            tenant_id=DEFAULT_TENANT_ID,
+            email=normalized_email,
+            display_name=display_name,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+            roles=roles,
+        )
+        self._users[user.id] = user
         return user
 
     def update_user(

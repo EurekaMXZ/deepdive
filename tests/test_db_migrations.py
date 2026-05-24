@@ -144,6 +144,16 @@ class DatabaseMigrationTest(unittest.TestCase):
         )
         self.assertRegex(
             sql,
+            r"create\s+unique\s+index\s+uq_oauth_accounts_provider_account\s+on\s+oauth_accounts"
+            r"\s+\(provider,\s*provider_account_id\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_oauth_accounts_provider_tenant_email\s+on\s+oauth_accounts"
+            r"\s+\(provider,\s*tenant_id,\s*provider_email\)",
+        )
+        self.assertRegex(
+            sql,
             r"create\s+unique\s+index\s+uq_snapshots_repo_commit_policy\s+on\s+snapshots"
             r"\s+\(repository_url_hash,\s*resolved_commit_sha,\s*snapshot_policy_hash\)",
         )

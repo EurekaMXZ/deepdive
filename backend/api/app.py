@@ -21,6 +21,14 @@ from backend.auth import (
     RedisRefreshTokenStore,
     RefreshTokenStore,
 )
+from backend.auth.github import GitHubOAuthConfig, UrlLibGitHubOAuthClient
+from backend.auth.oauth import (
+    InMemoryOAuthCodeStore,
+    InMemoryOAuthStateStore,
+    RedisOAuthCodeStore,
+    RedisOAuthStateStore,
+)
+from backend.auth.turnstile import CloudflareTurnstileVerifier, NoopTurnstileVerifier, TurnstileConfig
 from backend.config import DEFAULT_CONFIG_VERSION, AppConfig, load_app_config_from_env, load_dotenv_if_exists
 from backend.db.runtime import create_database, create_database_from_env
 from backend.document import DocumentRepository, DocumentService
@@ -33,6 +41,7 @@ def create_app() -> FastAPI:
     app.state.analysis_service = InMemoryAnalysisService()
     app.state.auth_service = InMemoryAuthService(jwt_secret=_jwt_secret(), refresh_token_store=_refresh_token_store())
     app.state.document_service = DocumentService(repository=DocumentRepository(), storage=InMemoryObjectStorage())
+    _install_auth_integrations(app)
     _install_routes(app)
     return app
 
@@ -70,6 +79,7 @@ def create_postgres_app(
         repository=PostgresDocumentRepository(database),
         storage=_object_storage_from_env(),
     )
+    _install_auth_integrations(app)
     _install_routes(app)
 
     return app
@@ -91,19 +101,43 @@ def _install_routes(app: FastAPI) -> None:
     app.add_exception_handler(HTTPException, cast(ExceptionHandler, api_exception_handler))
 
 
+def _install_auth_integrations(app: FastAPI) -> None:
+    turnstile_config = _turnstile_config_from_env()
+    github_config = _github_oauth_config_from_env()
+    app.state.turnstile_config = turnstile_config
+    app.state.turnstile_verifier = (
+        CloudflareTurnstileVerifier(turnstile_config) if turnstile_config.enabled else NoopTurnstileVerifier()
+    )
+    app.state.github_oauth_config = github_config
+    app.state.github_oauth_client = UrlLibGitHubOAuthClient(github_config)
+    redis_client = _redis_client_from_env()
+    if redis_client is None:
+        app.state.oauth_state_store = InMemoryOAuthStateStore()
+        app.state.oauth_code_store = InMemoryOAuthCodeStore()
+    else:
+        app.state.oauth_state_store = RedisOAuthStateStore(redis_client)
+        app.state.oauth_code_store = RedisOAuthCodeStore(redis_client)
+
+
 def _jwt_secret() -> str:
     return os.environ.get("JWT_SECRET", "deepdive-dev-secret")
 
 
 def _refresh_token_store() -> RefreshTokenStore:
+    redis_client = _redis_client_from_env()
+    if redis_client is None:
+        return InMemoryRefreshTokenStore()
+    return RedisRefreshTokenStore(redis_client)
+
+
+def _redis_client_from_env() -> Any | None:
     redis_url = os.environ.get("REDIS_URL")
     if redis_url is None or not redis_url.strip():
-        return InMemoryRefreshTokenStore()
-
+        return None
     from redis import Redis
 
     redis_factory = cast(Any, Redis)
-    return RedisRefreshTokenStore(redis_factory.from_url(redis_url, decode_responses=True))
+    return redis_factory.from_url(redis_url, decode_responses=True)
 
 
 def _object_storage_from_env() -> MinioObjectStorage:
@@ -118,6 +152,33 @@ def _object_storage_from_env() -> MinioObjectStorage:
 
 def _bool_env(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _turnstile_config_from_env() -> TurnstileConfig:
+    return TurnstileConfig(
+        enabled=_bool_env(os.environ.get("TURNSTILE_ENABLED", "false")),
+        secret_key=os.environ.get("TURNSTILE_SECRET_KEY", ""),
+        allowed_hostnames=frozenset(_csv_env("TURNSTILE_ALLOWED_HOSTNAMES")),
+        timeout_seconds=int(os.environ.get("TURNSTILE_VERIFY_TIMEOUT_SECONDS", "5")),
+    )
+
+
+def _github_oauth_config_from_env() -> GitHubOAuthConfig:
+    return GitHubOAuthConfig(
+        enabled=_bool_env(os.environ.get("GITHUB_OAUTH_ENABLED", "false")),
+        client_id=os.environ.get("GITHUB_OAUTH_CLIENT_ID", ""),
+        client_secret=os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", ""),
+        redirect_uri=os.environ.get("GITHUB_OAUTH_REDIRECT_URI", ""),
+        frontend_redirect_uri=os.environ.get("GITHUB_OAUTH_FRONTEND_REDIRECT_URI", ""),
+        state_ttl_seconds=int(os.environ.get("GITHUB_OAUTH_STATE_TTL_SECONDS", "600")),
+        exchange_code_ttl_seconds=int(os.environ.get("GITHUB_OAUTH_EXCHANGE_CODE_TTL_SECONDS", "60")),
+        allowed_email_domains=frozenset(_csv_env("GITHUB_OAUTH_ALLOWED_EMAIL_DOMAINS")),
+    )
+
+
+def _csv_env(name: str) -> list[str]:
+    value = os.environ.get(name, "")
+    return [item.strip().lower() for item in value.split(",") if item.strip()]
 
 
 app = create_app_from_env()

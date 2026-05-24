@@ -10,6 +10,18 @@ class RefreshTokenStore(Protocol):
     def pop(self, token_hash: str) -> str | None: ...
 
 
+class OAuthStateStore(Protocol):
+    def create(self, *, redirect_to: str | None, ttl_seconds: int) -> str: ...
+
+    def pop(self, state: str) -> object | None: ...
+
+
+class OAuthCodeStore(Protocol):
+    def create(self, *, user_id: str, ttl_seconds: int) -> str: ...
+
+    def pop(self, code: str) -> object | None: ...
+
+
 class InMemoryRefreshTokenStore:
     def __init__(self) -> None:
         self._tokens: dict[str, tuple[str, datetime]] = {}

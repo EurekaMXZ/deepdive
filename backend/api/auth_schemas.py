@@ -19,6 +19,7 @@ class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=12)
     display_name: str | None = None
+    turnstile_token: str | None = None
 
     @field_validator("email")
     @classmethod
@@ -29,6 +30,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str = Field(min_length=1)
+    turnstile_token: str | None = None
 
     @field_validator("email")
     @classmethod
@@ -38,6 +40,10 @@ class LoginRequest(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str = Field(min_length=1)
+
+
+class OAuthExchangeRequest(BaseModel):
+    code: str = Field(min_length=1)
 
 
 class TokenResponse(BaseModel):

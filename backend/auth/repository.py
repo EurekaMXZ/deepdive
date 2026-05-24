@@ -174,6 +174,50 @@ class PostgresAuthRepository:
             raise RuntimeError("created user could not be loaded")
         return user
 
+    async def create_user_without_password(
+        self,
+        *,
+        email: str,
+        display_name: str | None,
+        role_names: Sequence[str],
+    ) -> UserRecord:
+        now = datetime.now(UTC)
+        user_id = new_uuid7()
+        async with self._connection() as connection:
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO users (id, tenant_id, email, display_name, is_active, created_at, updated_at)
+                    VALUES (:id, :tenant_id, :email, :display_name, :is_active, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "id": user_id,
+                    "tenant_id": DEFAULT_TENANT_ID,
+                    "email": email,
+                    "display_name": display_name,
+                    "is_active": True,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            roles = await _roles_by_names(connection, role_names)
+            for role in roles:
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO user_roles (id, user_id, role_id, created_at)
+                        VALUES (:id, :user_id, :role_id, :created_at)
+                        ON CONFLICT (user_id, role_id) DO NOTHING
+                        """
+                    ),
+                    {"id": new_uuid7(), "user_id": user_id, "role_id": role.id, "created_at": now},
+                )
+        user = await self.get_user(user_id)
+        if user is None:
+            raise RuntimeError("created user could not be loaded")
+        return user
+
     async def get_user_by_email_with_password(self, email: str) -> tuple[UserRecord, str] | None:
         async with self._connection() as connection:
             result = await connection.execute(
@@ -196,6 +240,82 @@ class PostgresAuthRepository:
         if user is None:
             return None
         return user, str(row["password_hash"])
+
+    async def get_user_by_email(self, email: str) -> UserRecord | None:
+        async with self._connection() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM users
+                    WHERE tenant_id = :tenant_id
+                      AND email = :email
+                    """
+                ),
+                {"tenant_id": DEFAULT_TENANT_ID, "email": email},
+            )
+            row = result.mappings().first()
+        return None if row is None else await self.get_user(cast(UUID, row["id"]))
+
+    async def get_user_by_external_identity(self, provider: str, provider_account_id: str) -> UserRecord | None:
+        async with self._connection() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT user_id
+                    FROM oauth_accounts
+                    WHERE provider = :provider
+                      AND provider_account_id = :provider_account_id
+                    """
+                ),
+                {"provider": provider, "provider_account_id": provider_account_id},
+            )
+            row = result.mappings().first()
+        return None if row is None else await self.get_user(cast(UUID, row["user_id"]))
+
+    async def link_external_identity(
+        self,
+        *,
+        user_id: UUID,
+        provider: str,
+        provider_account_id: str,
+        provider_login: str | None,
+        provider_email: str,
+        provider_email_verified: bool,
+    ) -> None:
+        now = datetime.now(UTC)
+        async with self._connection() as connection:
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO oauth_accounts (
+                        id, tenant_id, user_id, provider, provider_account_id, provider_login,
+                        provider_email, provider_email_verified, created_at, updated_at
+                    )
+                    VALUES (
+                        :id, :tenant_id, :user_id, :provider, :provider_account_id, :provider_login,
+                        :provider_email, :provider_email_verified, :created_at, :updated_at
+                    )
+                    ON CONFLICT (provider, provider_account_id) DO UPDATE
+                    SET provider_login = EXCLUDED.provider_login,
+                        provider_email = EXCLUDED.provider_email,
+                        provider_email_verified = EXCLUDED.provider_email_verified,
+                        updated_at = EXCLUDED.updated_at
+                    """
+                ),
+                {
+                    "id": new_uuid7(),
+                    "tenant_id": DEFAULT_TENANT_ID,
+                    "user_id": user_id,
+                    "provider": provider,
+                    "provider_account_id": provider_account_id,
+                    "provider_login": provider_login,
+                    "provider_email": provider_email,
+                    "provider_email_verified": provider_email_verified,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
 
     async def list_users(self) -> list[UserRecord]:
         async with self._connection() as connection:

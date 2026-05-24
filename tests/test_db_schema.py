@@ -13,6 +13,7 @@ class DatabaseSchemaTest(unittest.TestCase):
             "tenants",
             "users",
             "user_credentials",
+            "oauth_accounts",
             "refresh_tokens",
             "roles",
             "permissions",
@@ -81,6 +82,7 @@ class DatabaseSchemaTest(unittest.TestCase):
         permissions = metadata.tables["permissions"]
         role_permissions = metadata.tables["role_permissions"]
         user_roles = metadata.tables["user_roles"]
+        oauth_accounts = metadata.tables["oauth_accounts"]
 
         self.assertIn("created_by_user_id", metadata.tables["analyses"].c)
         self.assertIn(
@@ -106,6 +108,14 @@ class DatabaseSchemaTest(unittest.TestCase):
         self.assertIn(
             ("user_id", "role_id"),
             {_columns(index) for index in user_roles.indexes if index.unique},
+        )
+        self.assertIn(
+            ("provider", "provider_account_id"),
+            {_columns(index) for index in oauth_accounts.indexes if index.unique},
+        )
+        self.assertIn(
+            ("provider", "tenant_id", "provider_email"),
+            {_columns(index) for index in oauth_accounts.indexes if index.unique},
         )
         self.assertIn(
             ("event_id", "consumer_name"),
