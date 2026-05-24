@@ -222,3 +222,6 @@ logs
 
 # Node / pnpm workspace
 node_modules/
+
+# Playwright MCP
+.playwright-mcp

@@ -3,7 +3,15 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "frontend:build": "pnpm --filter frontend build",
-    "frontend:lint": "pnpm --filter frontend lint"
+    "build": "pnpm --filter @deepdive/frontend build",
+    "dev": "pnpm --filter @deepdive/frontend dev",
+    "lint": "pnpm --filter @deepdive/frontend lint",
+    "preview": "pnpm --filter @deepdive/frontend preview",
+    "test": "pnpm --filter @deepdive/frontend test",
+    "frontend:build": "pnpm --filter @deepdive/frontend build",
+    "frontend:dev": "pnpm --filter @deepdive/frontend dev",
+    "frontend:lint": "pnpm --filter @deepdive/frontend lint",
+    "frontend:preview": "pnpm --filter @deepdive/frontend preview",
+    "frontend:test": "pnpm --filter @deepdive/frontend test"
   }
 }

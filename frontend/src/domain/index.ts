@@ -4,6 +4,7 @@ export {
   getAnalysisStatusMeta,
   isTerminalAnalysisStatus,
 } from './analysis.ts'
+export { normalizeRepositoryQuery } from './projectSearch.ts'
 export type {
   AgentId,
   Analysis,

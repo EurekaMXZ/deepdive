@@ -67,11 +67,14 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Test frontend business logic
+        run: pnpm --filter @deepdive/frontend test
+
       - name: Lint frontend
-        run: pnpm --filter frontend lint
+        run: pnpm --filter @deepdive/frontend lint
 
       - name: Build frontend
-        run: pnpm --filter frontend build
+        run: pnpm --filter @deepdive/frontend build
 
   compose:
     name: Compose config
