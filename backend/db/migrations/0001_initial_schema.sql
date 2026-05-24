@@ -14,6 +14,7 @@ CREATE TABLE config_snapshots (
 CREATE TABLE analyses (
     id uuid primary key default uuidv7(),
     tenant_id uuid,
+    created_by_user_id uuid,
     repository_url text not null,
     repository_url_hash text not null,
     requested_ref text not null,
@@ -25,6 +26,81 @@ CREATE TABLE analyses (
     completed_at timestamptz,
     error_code text,
     error_message text
+);
+
+CREATE TABLE tenants (
+    id uuid primary key default uuidv7(),
+    slug text not null,
+    display_name text not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+);
+
+CREATE TABLE users (
+    id uuid primary key default uuidv7(),
+    tenant_id uuid not null references tenants(id),
+    email text not null,
+    display_name text,
+    is_active boolean not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+);
+
+CREATE TABLE user_credentials (
+    id uuid primary key default uuidv7(),
+    user_id uuid not null references users(id),
+    password_hash text not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+);
+
+CREATE TABLE refresh_tokens (
+    id uuid primary key default uuidv7(),
+    user_id uuid not null references users(id),
+    token_hash text not null,
+    expires_at timestamptz not null,
+    revoked_at timestamptz,
+    created_at timestamptz not null
+);
+
+CREATE TABLE permissions (
+    id uuid primary key default uuidv7(),
+    name text not null,
+    description text not null,
+    created_at timestamptz not null
+);
+
+CREATE TABLE roles (
+    id uuid primary key default uuidv7(),
+    tenant_id uuid references tenants(id),
+    name text not null,
+    description text not null,
+    created_at timestamptz not null
+);
+
+CREATE TABLE role_permissions (
+    id uuid primary key default uuidv7(),
+    role_id uuid not null references roles(id),
+    permission_id uuid not null references permissions(id),
+    created_at timestamptz not null
+);
+
+CREATE TABLE user_roles (
+    id uuid primary key default uuidv7(),
+    user_id uuid not null references users(id),
+    role_id uuid not null references roles(id),
+    created_at timestamptz not null
+);
+
+CREATE TABLE audit_log (
+    id uuid primary key default uuidv7(),
+    tenant_id uuid references tenants(id),
+    actor_user_id uuid references users(id),
+    action text not null,
+    resource_type text not null,
+    resource_id uuid,
+    payload_json jsonb not null,
+    created_at timestamptz not null
 );
 
 CREATE TABLE snapshots (
@@ -259,8 +335,44 @@ CREATE TABLE agent_instruction_files (
 CREATE INDEX ix_analyses_tenant_created_at
     ON analyses (tenant_id, created_at);
 
+CREATE INDEX ix_analyses_tenant_created_by
+    ON analyses (tenant_id, created_by_user_id);
+
 CREATE INDEX ix_analyses_status_updated_at
     ON analyses (status, updated_at);
+
+CREATE UNIQUE INDEX uq_tenants_slug
+    ON tenants (slug);
+
+CREATE UNIQUE INDEX uq_users_tenant_email
+    ON users (tenant_id, email);
+
+CREATE INDEX ix_users_tenant_created_at
+    ON users (tenant_id, created_at);
+
+CREATE UNIQUE INDEX uq_user_credentials_user_id
+    ON user_credentials (user_id);
+
+CREATE UNIQUE INDEX uq_refresh_tokens_token_hash
+    ON refresh_tokens (token_hash);
+
+CREATE INDEX ix_refresh_tokens_user_expires_at
+    ON refresh_tokens (user_id, expires_at);
+
+CREATE UNIQUE INDEX uq_permissions_name
+    ON permissions (name);
+
+CREATE UNIQUE INDEX uq_roles_tenant_name
+    ON roles (tenant_id, name);
+
+CREATE UNIQUE INDEX uq_role_permissions_role_permission
+    ON role_permissions (role_id, permission_id);
+
+CREATE UNIQUE INDEX uq_user_roles_user_role
+    ON user_roles (user_id, role_id);
+
+CREATE INDEX ix_audit_log_tenant_created_at
+    ON audit_log (tenant_id, created_at);
 
 CREATE INDEX ix_agent_sessions_analysis_id
     ON agent_sessions (analysis_id);

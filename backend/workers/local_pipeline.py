@@ -16,8 +16,8 @@ from backend.cache import LocalSourceCache
 from backend.config import load_app_config_from_env, load_dotenv_if_exists
 from backend.db.connections import AsyncDbConnection, DbRow
 from backend.db.runtime import Database, create_database
-from backend.documents import DocumentService
-from backend.documents.repository import PostgresDocumentRepository
+from backend.document import DocumentService
+from backend.document.repository import PostgresDocumentRepository
 from backend.events import EventEnvelope, EventType
 from backend.execution import PermissionEngine, SourceToolExecutor
 from backend.execution.repository import PostgresSnapshotToolRepository, PostgresToolCallRepository

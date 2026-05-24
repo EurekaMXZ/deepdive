@@ -34,6 +34,39 @@ class PostgresDocumentRepository:
         row = result.mappings().first()
         return dict(row) if row is not None else None
 
+    async def list_documents(self, analysis_id: UUID) -> list[dict[str, Any]]:
+        async with self._connection() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT id, analysis_id, agent_id, title, kind, status, current_version,
+                           content_ref, content_hash, size_bytes, created_at, updated_at, finalized_at
+                    FROM documents
+                    WHERE analysis_id = :analysis_id
+                      AND status <> 'deleted'
+                    ORDER BY created_at, id
+                    """
+                ),
+                {"analysis_id": analysis_id},
+            )
+        return [dict(row) for row in result.mappings().all()]
+
+    async def list_revisions(self, document_id: UUID) -> list[dict[str, Any]]:
+        async with self._connection() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT id, document_id, version, tool_call_id, operation,
+                           content_ref, content_hash, size_bytes, created_at
+                    FROM document_revisions
+                    WHERE document_id = :document_id
+                    ORDER BY version
+                    """
+                ),
+                {"document_id": document_id},
+            )
+        return [dict(row) for row in result.mappings().all()]
+
     async def find_revision_by_tool_call(self, tool_call_id: UUID) -> dict[str, Any] | None:
         async with self._connection() as connection:
             result = await connection.execute(

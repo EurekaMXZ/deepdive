@@ -90,6 +90,21 @@ services:
       "
     restart: "no"
 
+  redis:
+    image: redis:8
+    container_name: deepdive-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
   api:
     profiles: ["app"]
     build:
@@ -103,6 +118,7 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepdive}:${POSTGRES_PASSWORD:-deepdive}@postgres:5432/${POSTGRES_DB:-deepdive}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MINIO_ENDPOINT: minio:9000
+      REDIS_URL: redis://redis:6379/0
       CACHE_ROOT_DIR: /cache/deepdive
     ports:
       - "${API_PORT:-8000}:8000"
@@ -115,6 +131,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   outbox-worker:
@@ -231,4 +249,5 @@ volumes:
   postgres-data:
   kafka-data:
   minio-data:
+  redis-data:
   app-cache:

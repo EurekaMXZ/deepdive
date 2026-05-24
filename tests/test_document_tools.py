@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from backend.config import AppConfig, ToolsConfig
-from backend.documents import DocumentRepository, DocumentService
+from backend.document import DocumentRepository, DocumentService
 from backend.execution import PermissionEngine, SourceToolExecutor, ToolExecutionContext
 from backend.ids import new_uuid7
 from backend.storage import InMemoryObjectStorage

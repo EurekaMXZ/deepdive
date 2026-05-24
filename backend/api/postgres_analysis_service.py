@@ -44,6 +44,8 @@ class PostgresAnalysisService:
         repository_url: str,
         requested_ref: str,
         analysis_profile_id: UUID | None = None,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
     ) -> AnalysisRecord:
         now = datetime.now(UTC)
         analysis_id = new_uuid7()
@@ -73,6 +75,7 @@ class PostgresAnalysisService:
                     INSERT INTO analyses (
                         id,
                         tenant_id,
+                        created_by_user_id,
                         repository_url,
                         repository_url_hash,
                         requested_ref,
@@ -85,6 +88,7 @@ class PostgresAnalysisService:
                     VALUES (
                         :id,
                         :tenant_id,
+                        :created_by_user_id,
                         :repository_url,
                         :repository_url_hash,
                         :requested_ref,
@@ -98,7 +102,8 @@ class PostgresAnalysisService:
                 ),
                 {
                     "id": analysis_id,
-                    "tenant_id": None,
+                    "tenant_id": tenant_id,
+                    "created_by_user_id": created_by_user_id,
                     "repository_url": repository_url,
                     "repository_url_hash": repository_url_hash,
                     "requested_ref": requested_ref,
@@ -199,6 +204,8 @@ class PostgresAnalysisService:
             resolved_commit_sha=None,
             created_at=now,
             updated_at=now,
+            tenant_id=tenant_id,
+            created_by_user_id=created_by_user_id,
         )
 
     async def list(
@@ -210,6 +217,8 @@ class PostgresAnalysisService:
         created_before: datetime | None = None,
         limit: int = 50,
         cursor: str | None = None,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
     ) -> list[AnalysisRecord]:
         params: dict[str, str | datetime | UUID | int | None] = {
             "status": status,
@@ -217,6 +226,8 @@ class PostgresAnalysisService:
             "created_after": created_after,
             "created_before": created_before,
             "limit": limit + 1,
+            "tenant_id": tenant_id,
+            "created_by_user_id": created_by_user_id,
         }
         clauses: list[str] = []
         if status is not None:
@@ -227,6 +238,10 @@ class PostgresAnalysisService:
             clauses.append("a.created_at >= :created_after")
         if created_before is not None:
             clauses.append("a.created_at < :created_before")
+        if tenant_id is not None:
+            clauses.append("a.tenant_id = :tenant_id")
+        if created_by_user_id is not None:
+            clauses.append("a.created_by_user_id = :created_by_user_id")
         cursor_values = decode_list_cursor(cursor)
         if cursor_values is not None:
             params["cursor_created_at"] = cursor_values[0]
@@ -242,6 +257,8 @@ class PostgresAnalysisService:
                         s.id AS agent_id,
                         s.snapshot_id AS snapshot_id,
                         a.status AS status,
+                        a.tenant_id AS tenant_id,
+                        a.created_by_user_id AS created_by_user_id,
                         a.repository_url AS repository_url,
                         a.requested_ref AS requested_ref,
                         snap.resolved_commit_sha AS resolved_commit_sha,
@@ -261,13 +278,35 @@ class PostgresAnalysisService:
             )
             return [_record_from_row(row) for row in result.mappings().all()]
 
-    async def get(self, analysis_id: UUID) -> AnalysisRecord | None:
+    async def get(
+        self,
+        analysis_id: UUID,
+        *,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> AnalysisRecord | None:
         async with self._database.begin() as connection:
-            return await _fetch_analysis_record(connection, analysis_id)
+            return await _fetch_analysis_record(
+                connection,
+                analysis_id,
+                tenant_id=tenant_id,
+                created_by_user_id=created_by_user_id,
+            )
 
-    async def cancel(self, analysis_id: UUID) -> AnalysisRecord | None:
+    async def cancel(
+        self,
+        analysis_id: UUID,
+        *,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> AnalysisRecord | None:
         async with self._database.begin() as connection:
-            record = await _fetch_analysis_record(connection, analysis_id)
+            record = await _fetch_analysis_record(
+                connection,
+                analysis_id,
+                tenant_id=tenant_id,
+                created_by_user_id=created_by_user_id,
+            )
             if record is None:
                 return None
             if record.status in {"completed", "failed", "cancelled"}:
@@ -287,7 +326,12 @@ class PostgresAnalysisService:
                 {"analysis_id": analysis_id, "status": "cancelling", "updated_at": now},
             )
             if result.mappings().first() is None:
-                return await _fetch_analysis_record(connection, analysis_id)
+                return await _fetch_analysis_record(
+                    connection,
+                    analysis_id,
+                    tenant_id=tenant_id,
+                    created_by_user_id=created_by_user_id,
+                )
             await connection.execute(
                 text(
                     """
@@ -330,7 +374,17 @@ class PostgresAnalysisService:
             record.updated_at = now
             return record
 
-    async def stream_events(self, analysis_id: UUID, *, after_seq: int = 0) -> list[AgentStreamEventRecord]:
+    async def stream_events(
+        self,
+        analysis_id: UUID,
+        *,
+        after_seq: int = 0,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> list[AgentStreamEventRecord]:
+        record = await self.get(analysis_id, tenant_id=tenant_id, created_by_user_id=created_by_user_id)
+        if record is None:
+            return []
         async with self._database.begin() as connection:
             result = await connection.execute(
                 text(
@@ -354,17 +408,33 @@ class PostgresAnalysisService:
                 for row in result.mappings().all()
             ]
 
-    async def analysis_status(self, analysis_id: UUID) -> str | None:
+    async def analysis_status(
+        self,
+        analysis_id: UUID,
+        *,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> str | None:
+        clauses = ["id = :analysis_id"]
+        params = {
+            "analysis_id": analysis_id,
+            "tenant_id": tenant_id,
+            "created_by_user_id": created_by_user_id,
+        }
+        if tenant_id is not None:
+            clauses.append("tenant_id = :tenant_id")
+        if created_by_user_id is not None:
+            clauses.append("created_by_user_id = :created_by_user_id")
         async with self._database.begin() as connection:
             result = await connection.execute(
                 text(
-                    """
+                    f"""
                     SELECT status
                     FROM analyses
-                    WHERE id = :analysis_id
+                    WHERE {" AND ".join(clauses)}
                     """
                 ),
-                {"analysis_id": analysis_id},
+                params,
             )
             row = result.mappings().first()
             return str(row["status"]) if row is not None else None
@@ -397,15 +467,33 @@ class PostgresAnalysisService:
         }
 
 
-async def _fetch_analysis_record(connection: AsyncDbConnection, analysis_id: UUID) -> AnalysisRecord | None:
+async def _fetch_analysis_record(
+    connection: AsyncDbConnection,
+    analysis_id: UUID,
+    *,
+    tenant_id: UUID | None = None,
+    created_by_user_id: UUID | None = None,
+) -> AnalysisRecord | None:
+    clauses = ["a.id = :analysis_id"]
+    params = {
+        "analysis_id": analysis_id,
+        "tenant_id": tenant_id,
+        "created_by_user_id": created_by_user_id,
+    }
+    if tenant_id is not None:
+        clauses.append("a.tenant_id = :tenant_id")
+    if created_by_user_id is not None:
+        clauses.append("a.created_by_user_id = :created_by_user_id")
     result = await connection.execute(
         text(
-            """
+            f"""
             SELECT
                 a.id AS analysis_id,
                 s.id AS agent_id,
                 s.snapshot_id AS snapshot_id,
                 a.status AS status,
+                a.tenant_id AS tenant_id,
+                a.created_by_user_id AS created_by_user_id,
                 a.repository_url AS repository_url,
                 a.requested_ref AS requested_ref,
                 snap.resolved_commit_sha AS resolved_commit_sha,
@@ -416,10 +504,10 @@ async def _fetch_analysis_record(connection: AsyncDbConnection, analysis_id: UUI
             FROM analyses a
             JOIN agent_sessions s ON s.analysis_id = a.id
             LEFT JOIN snapshots snap ON snap.id = s.snapshot_id
-            WHERE a.id = :analysis_id
+            WHERE {" AND ".join(clauses)}
             """
         ),
-        {"analysis_id": analysis_id},
+        params,
     )
     row = result.mappings().first()
     return _record_from_row(row) if row is not None else None
@@ -438,6 +526,8 @@ def _record_from_row(row: Mapping[Any, Any]) -> AnalysisRecord:
         updated_at=cast(datetime, row["updated_at"]),
         error_code=cast(str | None, row.get("error_code")),
         error_message=cast(str | None, row.get("error_message")),
+        tenant_id=cast(UUID | None, row.get("tenant_id")),
+        created_by_user_id=cast(UUID | None, row.get("created_by_user_id")),
     )
 
 

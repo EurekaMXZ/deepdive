@@ -9,6 +9,7 @@ from unittest.mock import patch
 from backend.api.app import create_app_from_env, create_postgres_app
 from backend.api.services import InMemoryAnalysisService, PostgresAnalysisService
 from backend.config import AppConfig, OpenAIConfig
+from backend.document import DocumentService
 
 
 class AppFactoryTest(unittest.TestCase):
@@ -19,16 +20,23 @@ class AppFactoryTest(unittest.TestCase):
                 app = create_app_from_env()
 
         self.assertIsInstance(app.state.analysis_service, InMemoryAnalysisService)
+        self.assertIsInstance(app.state.document_service, DocumentService)
+        self.assertTrue(hasattr(app.state, "auth_service"))
 
     def test_create_app_from_env_uses_postgres_service_when_database_url_exists(self) -> None:
         with patch.dict(
             os.environ,
-            {"DATABASE_URL": "postgresql+psycopg://deepdive:deepdive@localhost:5432/deepdive"},
+            {
+                "DATABASE_URL": "postgresql+psycopg://deepdive:deepdive@localhost:5432/deepdive",
+                "MINIO_ENDPOINT": "localhost:9000",
+            },
             clear=True,
         ):
             app = create_app_from_env()
 
         self.assertIsInstance(app.state.analysis_service, PostgresAnalysisService)
+        self.assertIsInstance(app.state.document_service, DocumentService)
+        self.assertTrue(hasattr(app.state, "auth_service"))
 
     def test_create_app_from_env_loads_database_url_from_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -42,6 +50,8 @@ class AppFactoryTest(unittest.TestCase):
                 app = create_app_from_env()
 
         self.assertIsInstance(app.state.analysis_service, PostgresAnalysisService)
+        self.assertIsInstance(app.state.document_service, DocumentService)
+        self.assertTrue(hasattr(app.state, "auth_service"))
 
     def test_create_postgres_app_does_not_expose_live_model_stream_state(self) -> None:
         app = create_postgres_app(

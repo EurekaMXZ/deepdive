@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 class AnalysisApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(create_app())
+        self.headers = self._auth_headers()
 
     def test_create_analysis_returns_queued_resource(self) -> None:
         response = self.client.post(
@@ -18,6 +19,7 @@ class AnalysisApiTest(unittest.TestCase):
                 "repository_url": "https://github.com/example/project.git",
                 "ref": "main",
             },
+            headers=self.headers,
         )
 
         self.assertEqual(response.status_code, 201)
@@ -35,6 +37,7 @@ class AnalysisApiTest(unittest.TestCase):
                 "repository_url": "https://token123@github.com/example/private.git",
                 "ref": "main",
             },
+            headers=self.headers,
         )
 
         self.assertEqual(response.status_code, 422)
@@ -52,6 +55,7 @@ class AnalysisApiTest(unittest.TestCase):
                         "repository_url": repository_url,
                         "ref": "main",
                     },
+                    headers=self.headers,
                 )
 
                 self.assertEqual(response.status_code, 422)
@@ -65,6 +69,7 @@ class AnalysisApiTest(unittest.TestCase):
                 "ref": "main",
                 "analysis_profile_id": "019e505e-df2b-7e6f-9a5e-141aa98f59da",
             },
+            headers=self.headers,
         )
 
         self.assertEqual(response.status_code, 422)
@@ -77,10 +82,11 @@ class AnalysisApiTest(unittest.TestCase):
                 "repository_url": "https://github.com/example/project.git",
                 "ref": "main",
             },
+            headers=self.headers,
         ).json()
 
-        listed = self.client.get("/analysis")
-        detail = self.client.get(f"/analysis/{created['analysis_id']}")
+        listed = self.client.get("/analysis", headers=self.headers)
+        detail = self.client.get(f"/analysis/{created['analysis_id']}", headers=self.headers)
 
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()["items"][0]["analysis_id"], created["analysis_id"])
@@ -97,6 +103,7 @@ class AnalysisApiTest(unittest.TestCase):
                 "repository_url": "https://github.com/example/first.git",
                 "ref": "main",
             },
+            headers=self.headers,
         ).json()
         second = self.client.post(
             "/analysis",
@@ -104,10 +111,15 @@ class AnalysisApiTest(unittest.TestCase):
                 "repository_url": "https://github.com/example/second.git",
                 "ref": "main",
             },
+            headers=self.headers,
         ).json()
 
-        page_one = self.client.get("/analysis", params={"limit": 1})
-        page_two = self.client.get("/analysis", params={"limit": 1, "cursor": page_one.json()["next_cursor"]})
+        page_one = self.client.get("/analysis", params={"limit": 1}, headers=self.headers)
+        page_two = self.client.get(
+            "/analysis",
+            params={"limit": 1, "cursor": page_one.json()["next_cursor"]},
+            headers=self.headers,
+        )
 
         self.assertEqual(page_one.status_code, 200)
         self.assertEqual(page_two.status_code, 200)
@@ -122,9 +134,10 @@ class AnalysisApiTest(unittest.TestCase):
                 "repository_url": "https://github.com/example/project.git",
                 "ref": "main",
             },
+            headers=self.headers,
         ).json()
 
-        response = self.client.post(f"/analysis/{created['analysis_id']}/cancel")
+        response = self.client.post(f"/analysis/{created['analysis_id']}/cancel", headers=self.headers)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "cancelling")
@@ -132,12 +145,23 @@ class AnalysisApiTest(unittest.TestCase):
     def test_unknown_analysis_returns_standard_error(self) -> None:
         missing_id = "019e505e-df2b-7e6f-9a5e-141aa98f59da"
 
-        response = self.client.get(f"/analysis/{missing_id}")
+        response = self.client.get(f"/analysis/{missing_id}", headers=self.headers)
 
         self.assertEqual(response.status_code, 404)
         body = response.json()
         self.assertEqual(body["error"]["code"], "ANALYSIS_NOT_FOUND")
         self.assertEqual(uuid.UUID(body["error"]["request_id"]).version, 7)
+
+    def _auth_headers(self) -> dict[str, str]:
+        self.client.post(
+            "/auth/register",
+            json={"email": "analysis@example.com", "password": "correct horse battery staple"},
+        )
+        tokens = self.client.post(
+            "/auth/login",
+            json={"email": "analysis@example.com", "password": "correct horse battery staple"},
+        ).json()
+        return {"Authorization": f"Bearer {tokens['access_token']}"}
 
 
 if __name__ == "__main__":

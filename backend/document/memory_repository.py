@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+from uuid import UUID
+
+from backend.document.models import coerce_uuid
+
+
+@dataclass
+class DocumentRepository:
+    documents: dict[UUID, dict[str, Any]] = field(default_factory=dict[UUID, dict[str, Any]])
+    revisions: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+
+    async def get_document(self, document_id: UUID) -> dict[str, Any] | None:
+        document = self.documents.get(document_id)
+        return dict(document) if document is not None else None
+
+    async def list_documents(self, analysis_id: UUID) -> list[dict[str, Any]]:
+        documents = [
+            dict(document)
+            for document in self.documents.values()
+            if coerce_uuid(document["analysis_id"]) == analysis_id and document["status"] != "deleted"
+        ]
+        return sorted(documents, key=lambda document: (document["created_at"], document["id"]))
+
+    async def list_revisions(self, document_id: UUID) -> list[dict[str, Any]]:
+        revisions = [dict(revision) for revision in self.revisions if revision["document_id"] == document_id]
+        return sorted(revisions, key=lambda revision: int(revision["version"]))
+
+    async def find_revision_by_tool_call(self, tool_call_id: UUID) -> dict[str, Any] | None:
+        for revision in self.revisions:
+            if revision["tool_call_id"] == tool_call_id:
+                return dict(revision)
+        return None
+
+    async def add_document_with_revision(self, document: dict[str, Any], revision: dict[str, Any]) -> None:
+        self.documents[document["id"]] = dict(document)
+        self.revisions.append(dict(revision))
+
+    async def update_document_with_revision(
+        self, document_id: UUID, updates: dict[str, Any], revision: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        document = dict(self.documents[document_id])
+        if "expected_version" in updates and int(document["current_version"]) != int(updates["expected_version"]):
+            return None
+        if "expected_status" in updates and document["status"] != updates["expected_status"]:
+            return None
+        updates = {key: value for key, value in updates.items() if key not in {"expected_version", "expected_status"}}
+        document.update(updates)
+        self.documents[document_id] = document
+        self.revisions.append(dict(revision))
+        return dict(document)

@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 class ApiSseReplayTest(unittest.TestCase):
     def test_events_endpoint_replays_persisted_events_after_last_event_id(self) -> None:
         app = create_app()
+        client = TestClient(app)
+        headers = _auth_headers(client)
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         now = datetime.now(UTC)
@@ -37,9 +39,9 @@ class ApiSseReplayTest(unittest.TestCase):
         )
         app.state.analysis_service = service
 
-        response = TestClient(app).get(
+        response = client.get(
             f"/analysis/{analysis_id}/events",
-            headers={"Last-Event-ID": "1"},
+            headers={**headers, "Last-Event-ID": "1"},
         )
 
         self.assertEqual(response.status_code, 200)
@@ -50,6 +52,8 @@ class ApiSseReplayTest(unittest.TestCase):
 
     def test_events_endpoint_replays_persisted_reasoning_summary(self) -> None:
         app = create_app()
+        client = TestClient(app)
+        headers = _auth_headers(client)
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         now = datetime.now(UTC)
@@ -82,9 +86,9 @@ class ApiSseReplayTest(unittest.TestCase):
         )
         app.state.analysis_service = service
 
-        response = TestClient(app).get(
+        response = client.get(
             f"/analysis/{analysis_id}/events",
-            headers={"Last-Event-ID": "1"},
+            headers={**headers, "Last-Event-ID": "1"},
         )
 
         self.assertEqual(response.status_code, 200)
@@ -95,6 +99,8 @@ class ApiSseReplayTest(unittest.TestCase):
 
     def test_events_endpoint_continues_polling_until_terminal_status(self) -> None:
         app = create_app()
+        client = TestClient(app)
+        headers = _auth_headers(client)
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         now = datetime.now(UTC)
@@ -118,9 +124,10 @@ class ApiSseReplayTest(unittest.TestCase):
         service.statuses = ["running", "completed"]
         app.state.analysis_service = service
 
-        response = TestClient(app).get(
+        response = client.get(
             f"/analysis/{analysis_id}/events",
             params={"poll_interval_seconds": 0, "idle_timeout_seconds": 1},
+            headers=headers,
         )
 
         self.assertEqual(response.status_code, 200)
@@ -130,6 +137,8 @@ class ApiSseReplayTest(unittest.TestCase):
 
     def test_events_endpoint_replays_terminal_event_after_status_turns_terminal(self) -> None:
         app = create_app()
+        client = TestClient(app)
+        headers = _auth_headers(client)
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         now = datetime.now(UTC)
@@ -154,9 +163,10 @@ class ApiSseReplayTest(unittest.TestCase):
         service.release_events_after_status_checks = 1
         app.state.analysis_service = service
 
-        response = TestClient(app).get(
+        response = client.get(
             f"/analysis/{analysis_id}/events",
             params={"poll_interval_seconds": 0, "idle_timeout_seconds": 1},
+            headers=headers,
         )
 
         self.assertEqual(response.status_code, 200)
@@ -217,11 +227,12 @@ class FakeAnalysisService(InMemoryAnalysisService):
         self.status_calls = 0
         self.release_events_after_status_checks: int | None = None
 
-    def get(self, analysis_id):
+    def get(self, analysis_id, **kwargs):
+        del kwargs
         return self._record if analysis_id == self._record.analysis_id else None
 
-    def stream_events(self, analysis_id, *, after_seq: int = 0):
-        del analysis_id
+    def stream_events(self, analysis_id, *, after_seq: int = 0, **kwargs):
+        del analysis_id, kwargs
         self.stream_calls += 1
         visible_event_count = self.stream_calls
         if self.release_events_after_status_checks is not None:
@@ -230,13 +241,25 @@ class FakeAnalysisService(InMemoryAnalysisService):
                 visible_event_count = len(self._events)
         return [event for event in self._events if event["seq"] > after_seq and event["seq"] <= visible_event_count]
 
-    async def analysis_status(self, analysis_id):
-        del analysis_id
+    async def analysis_status(self, analysis_id, **kwargs):
+        del analysis_id, kwargs
         self.status_calls += 1
         if self.statuses:
             self._record.status = self.statuses.pop(0)
         await asyncio.sleep(0)
         return self._record.status
+
+
+def _auth_headers(client: TestClient) -> dict[str, str]:
+    client.post(
+        "/auth/register",
+        json={"email": "sse@example.com", "password": "correct horse battery staple"},
+    )
+    tokens = client.post(
+        "/auth/login",
+        json={"email": "sse@example.com", "password": "correct horse battery staple"},
+    ).json()
+    return {"Authorization": f"Bearer {tokens['access_token']}"}
 
 
 if __name__ == "__main__":

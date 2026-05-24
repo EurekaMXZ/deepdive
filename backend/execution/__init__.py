@@ -19,7 +19,7 @@ from uuid import UUID
 
 from backend.cache import LocalSourceCache, normalize_prefix, normalize_repo_path
 from backend.config import AppConfig, CacheConfig, ReadFileToolConfig, SearchTextToolConfig, WebSearchToolConfig
-from backend.documents import DocumentRepository, DocumentService, DocumentToolError
+from backend.document import DocumentRepository, DocumentService, DocumentToolError
 from backend.execution.envelopes import tool_error_envelope, tool_success_envelope
 from backend.execution.permissions import (
     DEFAULT_TOOL_POLICY_HASH as DEFAULT_TOOL_POLICY_HASH,

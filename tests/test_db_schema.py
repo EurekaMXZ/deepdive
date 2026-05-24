@@ -10,6 +10,15 @@ class DatabaseSchemaTest(unittest.TestCase):
     def test_core_tables_exist(self) -> None:
         required_tables = {
             "analyses",
+            "tenants",
+            "users",
+            "user_credentials",
+            "refresh_tokens",
+            "roles",
+            "permissions",
+            "role_permissions",
+            "user_roles",
+            "audit_log",
             "agent_sessions",
             "agent_turns",
             "agent_context_items",
@@ -66,7 +75,38 @@ class DatabaseSchemaTest(unittest.TestCase):
         snapshots = metadata.tables["snapshots"]
         snapshot_files = metadata.tables["snapshot_files"]
         document_revisions = metadata.tables["document_revisions"]
+        users = metadata.tables["users"]
+        refresh_tokens = metadata.tables["refresh_tokens"]
+        roles = metadata.tables["roles"]
+        permissions = metadata.tables["permissions"]
+        role_permissions = metadata.tables["role_permissions"]
+        user_roles = metadata.tables["user_roles"]
 
+        self.assertIn("created_by_user_id", metadata.tables["analyses"].c)
+        self.assertIn(
+            ("tenant_id", "email"),
+            {_columns(index) for index in users.indexes if index.unique},
+        )
+        self.assertIn(
+            ("token_hash",),
+            {_columns(index) for index in refresh_tokens.indexes if index.unique},
+        )
+        self.assertIn(
+            ("tenant_id", "name"),
+            {_columns(index) for index in roles.indexes if index.unique},
+        )
+        self.assertIn(
+            ("name",),
+            {_columns(index) for index in permissions.indexes if index.unique},
+        )
+        self.assertIn(
+            ("role_id", "permission_id"),
+            {_columns(index) for index in role_permissions.indexes if index.unique},
+        )
+        self.assertIn(
+            ("user_id", "role_id"),
+            {_columns(index) for index in user_roles.indexes if index.unique},
+        )
         self.assertIn(
             ("event_id", "consumer_name"),
             {_columns(constraint) for constraint in processed.constraints},

@@ -7,8 +7,8 @@ from pathlib import Path
 from backend.cache import LocalSourceCache
 from backend.config import load_app_config_from_env, load_dotenv_if_exists
 from backend.db.runtime import create_database
-from backend.documents import DocumentService
-from backend.documents.repository import PostgresDocumentRepository
+from backend.document import DocumentService
+from backend.document.repository import PostgresDocumentRepository
 from backend.events.kafka import AiokafkaEventConsumer, AiokafkaEventProducer
 from backend.events.runtime import run_consumer_forever, run_consumer_once
 from backend.execution import PermissionEngine, SourceToolExecutor

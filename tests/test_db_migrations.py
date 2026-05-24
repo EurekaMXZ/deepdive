@@ -119,6 +119,29 @@ class DatabaseMigrationTest(unittest.TestCase):
             r"create\s+unique\s+index\s+uq_snapshot_files_snapshot_path\s+on\s+snapshot_files"
             r"\s+\(snapshot_id,\s*path\)",
         )
+        analyses_body = _create_table_body(sql, "analyses")
+        self.assertRegex(analyses_body, r"\bcreated_by_user_id\s+uuid\b")
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_users_tenant_email\s+on\s+users\s+\(tenant_id,\s*email\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_refresh_tokens_token_hash\s+on\s+refresh_tokens\s+\(token_hash\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_roles_tenant_name\s+on\s+roles\s+\(tenant_id,\s*name\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_role_permissions_role_permission\s+on\s+role_permissions"
+            r"\s+\(role_id,\s*permission_id\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_user_roles_user_role\s+on\s+user_roles\s+\(user_id,\s*role_id\)",
+        )
         self.assertRegex(
             sql,
             r"create\s+unique\s+index\s+uq_snapshots_repo_commit_policy\s+on\s+snapshots"
@@ -146,7 +169,11 @@ class DatabaseMigrationTest(unittest.TestCase):
         sql = _migration_sql()
         required_indexes = {
             "ix_analyses_tenant_created_at": "analyses",
+            "ix_analyses_tenant_created_by": "analyses",
             "ix_analyses_status_updated_at": "analyses",
+            "ix_users_tenant_created_at": "users",
+            "ix_refresh_tokens_user_expires_at": "refresh_tokens",
+            "ix_audit_log_tenant_created_at": "audit_log",
             "ix_agent_sessions_analysis_id": "agent_sessions",
             "ix_agent_turns_agent_turn_index": "agent_turns",
             "ix_agent_context_items_agent_compacted_seq": "agent_context_items",

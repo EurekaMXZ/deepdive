@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 
-from backend.documents.repository import PostgresDocumentRepository
+from backend.document.repository import PostgresDocumentRepository
 from backend.ids import new_uuid7
 
 

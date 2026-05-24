@@ -30,6 +30,7 @@ analyses = Table(
     metadata,
     uuid_pk(),
     Column("tenant_id", UUID(as_uuid=True)),
+    Column("created_by_user_id", UUID(as_uuid=True)),
     Column("repository_url", Text, nullable=False),
     Column("repository_url_hash", Text, nullable=False),
     Column("requested_ref", Text, nullable=False),
@@ -43,7 +44,121 @@ analyses = Table(
     Column("error_message", Text),
 )
 Index("ix_analyses_tenant_created_at", analyses.c.tenant_id, analyses.c.created_at)
+Index("ix_analyses_tenant_created_by", analyses.c.tenant_id, analyses.c.created_by_user_id)
 Index("ix_analyses_status_updated_at", analyses.c.status, analyses.c.updated_at)
+
+
+tenants = Table(
+    "tenants",
+    metadata,
+    uuid_pk(),
+    Column("slug", Text, nullable=False),
+    Column("display_name", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_tenants_slug", tenants.c.slug, unique=True)
+
+
+users = Table(
+    "users",
+    metadata,
+    uuid_pk(),
+    Column("tenant_id", UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False),
+    Column("email", Text, nullable=False),
+    Column("display_name", Text),
+    Column("is_active", Boolean, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_users_tenant_email", users.c.tenant_id, users.c.email, unique=True)
+Index("ix_users_tenant_created_at", users.c.tenant_id, users.c.created_at)
+
+
+user_credentials = Table(
+    "user_credentials",
+    metadata,
+    uuid_pk(),
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id"), nullable=False),
+    Column("password_hash", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_user_credentials_user_id", user_credentials.c.user_id, unique=True)
+
+
+refresh_tokens = Table(
+    "refresh_tokens",
+    metadata,
+    uuid_pk(),
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id"), nullable=False),
+    Column("token_hash", Text, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("revoked_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_refresh_tokens_token_hash", refresh_tokens.c.token_hash, unique=True)
+Index("ix_refresh_tokens_user_expires_at", refresh_tokens.c.user_id, refresh_tokens.c.expires_at)
+
+
+permissions = Table(
+    "permissions",
+    metadata,
+    uuid_pk(),
+    Column("name", Text, nullable=False),
+    Column("description", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_permissions_name", permissions.c.name, unique=True)
+
+
+roles = Table(
+    "roles",
+    metadata,
+    uuid_pk(),
+    Column("tenant_id", UUID(as_uuid=True), ForeignKey("tenants.id")),
+    Column("name", Text, nullable=False),
+    Column("description", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_roles_tenant_name", roles.c.tenant_id, roles.c.name, unique=True)
+
+
+role_permissions = Table(
+    "role_permissions",
+    metadata,
+    uuid_pk(),
+    Column("role_id", UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False),
+    Column("permission_id", UUID(as_uuid=True), ForeignKey("permissions.id"), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_role_permissions_role_permission", role_permissions.c.role_id, role_permissions.c.permission_id, unique=True)
+
+
+user_roles = Table(
+    "user_roles",
+    metadata,
+    uuid_pk(),
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id"), nullable=False),
+    Column("role_id", UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_user_roles_user_role", user_roles.c.user_id, user_roles.c.role_id, unique=True)
+
+
+audit_log = Table(
+    "audit_log",
+    metadata,
+    uuid_pk(),
+    Column("tenant_id", UUID(as_uuid=True), ForeignKey("tenants.id")),
+    Column("actor_user_id", UUID(as_uuid=True), ForeignKey("users.id")),
+    Column("action", Text, nullable=False),
+    Column("resource_type", Text, nullable=False),
+    Column("resource_id", UUID(as_uuid=True)),
+    Column("payload_json", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("ix_audit_log_tenant_created_at", audit_log.c.tenant_id, audit_log.c.created_at)
 
 
 agent_sessions = Table(

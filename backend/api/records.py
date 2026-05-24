@@ -19,6 +19,8 @@ class AnalysisRecord:
     updated_at: datetime
     error_code: str | None = None
     error_message: str | None = None
+    tenant_id: UUID | None = None
+    created_by_user_id: UUID | None = None
 
 
 @dataclass

@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from backend.api.auth_dependencies import require_permission
 from backend.api.schemas import (
     AnalysisCreateRequest,
     AnalysisCreateResponse,
@@ -25,6 +26,7 @@ from backend.api.sse import (
     parse_last_event_id,
 )
 from backend.api.stream_schemas import TERMINAL_ANALYSIS_STATUSES
+from backend.auth import CurrentUser
 from backend.ids import new_uuid7
 
 
@@ -37,6 +39,8 @@ class AnalysisService(Protocol):
         repository_url: str,
         requested_ref: str,
         analysis_profile_id: UUID | None = None,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
     ) -> AnalysisRecord: ...
 
     def list(
@@ -48,15 +52,42 @@ class AnalysisService(Protocol):
         created_before: datetime | None = None,
         limit: int = 50,
         cursor: str | None = None,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
     ) -> list[AnalysisRecord]: ...
 
-    def get(self, analysis_id: UUID) -> AnalysisRecord | None: ...
+    def get(
+        self,
+        analysis_id: UUID,
+        *,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> AnalysisRecord | None: ...
 
-    def cancel(self, analysis_id: UUID) -> AnalysisRecord | None: ...
+    def cancel(
+        self,
+        analysis_id: UUID,
+        *,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> AnalysisRecord | None: ...
 
-    def stream_events(self, analysis_id: UUID, *, after_seq: int = 0) -> Iterable[StreamEvent | dict[str, Any]]: ...
+    def stream_events(
+        self,
+        analysis_id: UUID,
+        *,
+        after_seq: int = 0,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> Iterable[StreamEvent | dict[str, Any]]: ...
 
-    def analysis_status(self, analysis_id: UUID) -> str | None: ...
+    def analysis_status(
+        self,
+        analysis_id: UUID,
+        *,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> str | None: ...
 
 
 def get_analysis_service(request: Request) -> AnalysisService:
@@ -74,12 +105,15 @@ router = APIRouter()
 async def create_analysis(
     body: AnalysisCreateRequest,
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    current_user: Annotated[CurrentUser, Depends(require_permission("analysis:create"))],
 ) -> AnalysisCreateResponse:
     record = await maybe_await(
         service.create(
             repository_url=str(body.repository_url),
             requested_ref=body.ref,
             analysis_profile_id=body.analysis_profile_id,
+            tenant_id=current_user.tenant_id,
+            created_by_user_id=current_user.id,
         )
     )
     return AnalysisCreateResponse(
@@ -94,6 +128,7 @@ async def create_analysis(
 @router.get("/analysis", response_model=AnalysisListResponse)
 async def list_analysis(
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    current_user: Annotated[CurrentUser, Depends(require_permission("analysis:read"))],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     repository_url_hash: Annotated[str | None, Query()] = None,
     created_after: Annotated[datetime | None, Query()] = None,
@@ -109,6 +144,8 @@ async def list_analysis(
             created_before=created_before,
             limit=limit + 1,
             cursor=cursor,
+            tenant_id=current_user.tenant_id,
+            created_by_user_id=current_user.id,
         )
     )
     page = records[:limit]
@@ -127,8 +164,11 @@ async def list_analysis(
 async def get_analysis(
     analysis_id: UUID,
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    current_user: Annotated[CurrentUser, Depends(require_permission("analysis:read"))],
 ) -> AnalysisResponse:
-    record = await maybe_await(service.get(analysis_id))
+    record = await maybe_await(
+        service.get(analysis_id, tenant_id=current_user.tenant_id, created_by_user_id=current_user.id)
+    )
     if record is None:
         raise _not_found()
     return _to_response(record)
@@ -142,8 +182,11 @@ async def get_analysis(
 async def cancel_analysis(
     analysis_id: UUID,
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    current_user: Annotated[CurrentUser, Depends(require_permission("analysis:cancel"))],
 ) -> AnalysisResponse:
-    record = await maybe_await(service.cancel(analysis_id))
+    record = await maybe_await(
+        service.cancel(analysis_id, tenant_id=current_user.tenant_id, created_by_user_id=current_user.id)
+    )
     if record is None:
         raise _not_found()
     return _to_response(record)
@@ -156,13 +199,16 @@ async def cancel_analysis(
 async def stream_analysis_events(
     analysis_id: UUID,
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    current_user: Annotated[CurrentUser, Depends(require_permission("analysis:events"))],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     poll_interval_seconds: Annotated[float, Query(ge=0, le=10)] = 0.2,
     idle_timeout_seconds: Annotated[float, Query(ge=0, le=300)] = 30.0,
     debug_raw_llm_events: Annotated[bool, Query()] = False,
 ) -> StreamingResponse:
     del debug_raw_llm_events
-    record = await maybe_await(service.get(analysis_id))
+    record = await maybe_await(
+        service.get(analysis_id, tenant_id=current_user.tenant_id, created_by_user_id=current_user.id)
+    )
     if record is None:
         raise _not_found()
     after_seq = parse_last_event_id(last_event_id)
@@ -172,12 +218,21 @@ async def stream_analysis_events(
                 service,
                 analysis_id,
                 after_seq=after_seq,
+                tenant_id=current_user.tenant_id,
+                created_by_user_id=current_user.id,
                 poll_interval_seconds=poll_interval_seconds,
                 idle_timeout_seconds=idle_timeout_seconds,
             ),
             media_type="text/event-stream",
         )
-    events = await maybe_await(service.stream_events(analysis_id, after_seq=after_seq))
+    events = await maybe_await(
+        service.stream_events(
+            analysis_id,
+            after_seq=after_seq,
+            tenant_id=current_user.tenant_id,
+            created_by_user_id=current_user.id,
+        )
+    )
     return StreamingResponse(_sse_event_records(events), media_type="text/event-stream")
 
 
@@ -209,12 +264,21 @@ async def _polling_sse_event_records(
     after_seq: int,
     poll_interval_seconds: float,
     idle_timeout_seconds: float,
+    tenant_id: UUID | None = None,
+    created_by_user_id: UUID | None = None,
 ) -> AsyncIterator[str]:
     last_seq = after_seq
     loop = asyncio.get_running_loop()
     idle_deadline = loop.time() + idle_timeout_seconds
     while True:
-        events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
+        events = await maybe_await(
+            service.stream_events(
+                analysis_id,
+                after_seq=last_seq,
+                tenant_id=tenant_id,
+                created_by_user_id=created_by_user_id,
+            )
+        )
         emitted = False
         terminal_event_seen = False
         for event in events:
@@ -229,9 +293,18 @@ async def _polling_sse_event_records(
         if terminal_event_seen:
             return
 
-        current_status = await maybe_await(service.analysis_status(analysis_id))
+        current_status = await maybe_await(
+            service.analysis_status(analysis_id, tenant_id=tenant_id, created_by_user_id=created_by_user_id)
+        )
         if current_status in TERMINAL_ANALYSIS_STATUSES:
-            events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
+            events = await maybe_await(
+                service.stream_events(
+                    analysis_id,
+                    after_seq=last_seq,
+                    tenant_id=tenant_id,
+                    created_by_user_id=created_by_user_id,
+                )
+            )
             for event in events:
                 seq = event_seq(event)
                 last_seq = max(last_seq, seq)
