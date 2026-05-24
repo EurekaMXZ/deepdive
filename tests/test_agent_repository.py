@@ -168,6 +168,60 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["output_ref"], "agent-outputs/a/t.json")
         self.assertEqual(params["turn_id"], turn_id)
 
+    async def test_append_context_item_allocates_agent_seq_and_persists_payload(self) -> None:
+        agent_id = new_uuid7()
+        turn_id = new_uuid7()
+        connection = FakeConnection(scalar_values=[None, 3])
+        repository = PostgresAgentRepository(connection)
+
+        await repository.append_context_item(
+            agent_id=agent_id,
+            turn_id=turn_id,
+            item_type="assistant_output",
+            payload={"type": "message", "content": [{"type": "output_text", "text": "已读取 README"}]},
+            response_id="resp_1",
+            source="model",
+            idempotency_key="turn:assistant:resp_1",
+        )
+
+        self.assertIn("pg_advisory_xact_lock", str(connection.scalar_calls[0][0]))
+        insert_params = _first_executed_params(connection, "INSERT INTO agent_context_items")
+        self.assertEqual(insert_params["agent_id"], agent_id)
+        self.assertEqual(insert_params["turn_id"], turn_id)
+        self.assertEqual(insert_params["seq"], 3)
+        self.assertEqual(insert_params["item_type"], "assistant_output")
+        self.assertEqual(insert_params["payload_json"]["type"], "message")
+        self.assertEqual(insert_params["response_id"], "resp_1")
+        self.assertEqual(insert_params["source"], "model")
+        self.assertEqual(insert_params["idempotency_key"], "turn:assistant:resp_1")
+        self.assertIn("ON CONFLICT", str(connection.executed[-1][0]))
+
+    async def test_context_payload_helpers_create_canonical_shapes(self) -> None:
+        from backend.agent.context_items import (
+            assistant_output_payload,
+            function_call_output_payload,
+            function_call_payload,
+        )
+
+        function_call = function_call_payload(
+            call_id="call_1",
+            name="read_file",
+            arguments={"path": "README.md"},
+        )
+        function_output = function_call_output_payload(
+            call_id="call_1",
+            output={"ok": True, "result": {"path": "README.md"}},
+        )
+        assistant_output = assistant_output_payload("done")
+
+        self.assertEqual(function_call["type"], "function_call")
+        self.assertEqual(function_call["arguments"], "{\"path\":\"README.md\"}")
+        self.assertEqual(function_output["type"], "function_call_output")
+        self.assertIn("README.md", function_output["output"])
+        self.assertEqual(assistant_output["type"], "message")
+        self.assertEqual(assistant_output["role"], "assistant")
+        self.assertEqual(assistant_output["content"], [{"type": "output_text", "text": "done"}])
+
     async def test_start_turn_persists_trigger_event_id(self) -> None:
         connection = FakeConnection()
         repository = PostgresAgentRepository(connection)
@@ -301,12 +355,67 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("UPDATE agent_sessions", executed_sql)
         self.assertIn("UPDATE agent_turns", executed_sql)
         self.assertIn("INSERT INTO tool_calls", executed_sql)
+        self.assertIn("INSERT INTO agent_context_items", executed_sql)
         self.assertIn("INSERT INTO agent_stream_events", executed_sql)
         self.assertIn("INSERT INTO outbox_events", executed_sql)
         stream_insert = _first_executed_params(connection, "INSERT INTO agent_stream_events")
+        context_inserts = _executed_params(connection, "INSERT INTO agent_context_items")
         outbox_insert = _first_executed_params(connection, "INSERT INTO outbox_events")
+        self.assertEqual([params["item_type"] for params in context_inserts], ["function_call"])
+        self.assertEqual(context_inserts[0]["payload_json"]["call_id"], "call_1")
+        self.assertEqual(context_inserts[0]["idempotency_key"], "model:function_call:call_1")
         self.assertEqual(stream_insert["payload_json"]["tool_call_id"], str(tool_call_id))
         self.assertEqual(outbox_insert["payload_json"]["payload"]["tool_call_id"], str(tool_call_id))
+
+    async def test_complete_turn_with_reused_tool_result_persists_function_output_context_item(self) -> None:
+        tool_call_id = new_uuid7()
+        connection = FakeConnection(rows=[{"id": tool_call_id}], scalar_values=[None, 1])
+        repository = PostgresAgentRepository(connection)
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        turn_id = new_uuid7()
+
+        await repository.complete_turn_with_tool_call(
+            turn_id=turn_id,
+            response_id="resp_1",
+            previous_response_id=None,
+            input_ref="agent-inputs/a/t.json",
+            output_ref="agent-outputs/a/t.json",
+            usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+            latest_response_agent_id=agent_id,
+            tool_call_kwargs={
+                "agent_id": agent_id,
+                "turn_id": turn_id,
+                "snapshot_id": new_uuid7(),
+                "openai_call_id": "call_1",
+                "tool_name": "read_file",
+                "arguments_json": {"path": "README.md"},
+                "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
+                "tool_schema_hash": "sha256:schema",
+                "tool_policy_hash": "sha256:policy",
+                "status": "completed",
+                "result_summary": {"ok": True, "result": {"path": "README.md"}},
+            },
+            analysis_id=analysis_id,
+            agent_id=agent_id,
+            stream_event_type="tool_result",
+            stream_payload={"ok": True, "result": {"path": "README.md"}},
+            event=EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_COMPLETED,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                payload={"openai_call_id": "call_1"},
+            ),
+        )
+
+        context_inserts = _executed_params(connection, "INSERT INTO agent_context_items")
+        self.assertEqual(
+            [params["item_type"] for params in context_inserts],
+            ["function_call", "function_call_output"],
+        )
+        self.assertEqual(context_inserts[1]["payload_json"]["call_id"], "call_1")
+        self.assertIn("README.md", context_inserts[1]["payload_json"]["output"])
+        self.assertEqual(context_inserts[1]["idempotency_key"], "tool:function_call_output:call_1")
 
     async def test_complete_turn_with_final_answer_is_atomic(self) -> None:
         analysis_id = new_uuid7()
@@ -341,14 +450,20 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("UPDATE agent_turns", executed_sql)
         self.assertIn("UPDATE analyses", executed_sql)
         self.assertIn("UPDATE agent_sessions", executed_sql)
+        self.assertIn("INSERT INTO agent_context_items", executed_sql)
         self.assertIn("INSERT INTO agent_stream_events", executed_sql)
         self.assertIn("INSERT INTO outbox_events", executed_sql)
         stream_insert = _first_executed_params(connection, "INSERT INTO agent_stream_events")
+        context_insert = _first_executed_params(connection, "INSERT INTO agent_context_items")
         outbox_insert = _first_executed_params(connection, "INSERT INTO outbox_events")
+        self.assertEqual(context_insert["item_type"], "assistant_output")
+        self.assertEqual(context_insert["payload_json"]["role"], "assistant")
+        self.assertEqual(context_insert["payload_json"]["content"], [{"type": "output_text", "text": "done"}])
+        self.assertEqual(context_insert["idempotency_key"], "model:assistant_output:resp_1")
         self.assertEqual(stream_insert["event_type"], "done")
         self.assertEqual(outbox_insert["payload_json"]["event_type"], "AnalysisCompleted")
 
-    async def test_complete_turn_with_final_answer_writes_only_done_for_final_output(self) -> None:
+    async def test_complete_turn_with_final_answer_writes_final_delta_before_done(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         connection = FakeConnection(rows=[{"id": analysis_id}], rowcounts=[1, 1, 1], scalar_values=[None, 4])
@@ -373,13 +488,15 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
                 agent_id=agent_id,
                 payload={"response_id": "resp_1"},
             ),
-            final_output_payload={"text": "done"},
+            final_delta_payload={"text": "done"},
         )
 
         self.assertTrue(completed)
         stream_inserts = _executed_params(connection, "INSERT INTO agent_stream_events")
-        self.assertEqual([params["event_type"] for params in stream_inserts], ["done"])
-        self.assertEqual(stream_inserts[0]["payload_json"], {"status": "completed"})
+        self.assertEqual([params["event_type"] for params in stream_inserts], ["delta", "done"])
+        self.assertEqual(stream_inserts[0]["payload_json"], {"text": "done"})
+        self.assertEqual(stream_inserts[0]["response_id"], "resp_1")
+        self.assertEqual(stream_inserts[1]["payload_json"], {"status": "completed"})
 
     async def test_request_tool_call_rejects_terminal_or_cancelling_analysis(self) -> None:
         connection = FakeConnection(rows=[])
@@ -432,6 +549,62 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output["output_ref"], "agent-outputs/a/t.json")
         self.assertIn("JOIN agent_turns", str(connection.executed[0][0]))
         self.assertIn("IN ('completed', 'failed', 'denied')", str(connection.executed[0][0]))
+
+    async def test_load_uncompacted_context_items_reads_ordered_payloads(self) -> None:
+        agent_id = new_uuid7()
+        connection = FakeConnection(
+            rows=[
+                {
+                    "seq": 1,
+                    "item_type": "function_call",
+                    "payload_json": {"type": "function_call", "name": "read_file"},
+                    "source": "model",
+                    "response_id": "resp_1",
+                },
+                {
+                    "seq": 2,
+                    "item_type": "function_call_output",
+                    "payload_json": {"type": "function_call_output", "output": "{\"ok\":true}"},
+                    "source": "tool",
+                    "response_id": None,
+                },
+            ]
+        )
+        repository = PostgresAgentRepository(connection)
+
+        items = await repository.load_uncompacted_context_items(agent_id=agent_id, limit=8)
+
+        self.assertEqual([item["seq"] for item in items], [1, 2])
+        self.assertEqual(items[0]["payload_json"]["name"], "read_file")
+        statement = str(connection.executed[0][0])
+        self.assertIn("FROM agent_context_items", statement)
+        self.assertIn("compacted_at IS NULL", statement)
+        self.assertEqual(connection.executed[0][1]["agent_id"], agent_id)
+        self.assertEqual(connection.executed[0][1]["limit"], 8)
+
+    async def test_compact_context_items_marks_rows_and_writes_memory_summary(self) -> None:
+        agent_id = new_uuid7()
+        connection = FakeConnection()
+        repository = PostgresAgentRepository(connection)
+
+        await repository.compact_context_items(
+            agent_id=agent_id,
+            compacted_until_seq=12,
+            compacted_until_turn=3,
+            summary_json={"confirmed_facts": ["已读取 README"]},
+            evidence_ids_json=[],
+            focus_paths_json=["README.md"],
+            next_action="继续读取 src",
+        )
+
+        executed_sql = "\n".join(str(statement) for statement, _ in connection.executed)
+        self.assertIn("UPDATE agent_context_items", executed_sql)
+        self.assertIn("INSERT INTO memory_summaries", executed_sql)
+        update_params = _first_executed_params(connection, "UPDATE agent_context_items")
+        summary_params = _first_executed_params(connection, "INSERT INTO memory_summaries")
+        self.assertEqual(update_params["agent_id"], agent_id)
+        self.assertEqual(update_params["compacted_until_seq"], 12)
+        self.assertEqual(summary_params["summary_json"]["confirmed_facts"], ["已读取 README"])
 
     async def test_count_tool_calls_counts_agent_tool_rows(self) -> None:
         agent_id = new_uuid7()

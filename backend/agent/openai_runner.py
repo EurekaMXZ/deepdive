@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.agent import ModelResponse, ModelToolCall
-from backend.events.live_stream import (
-    completed_live_payload,
-    model_reasoning_summary_live_payloads,
-    model_reasoning_summary_text_live_payload,
+from backend.events.model_stream_payloads import (
+    completed_response_stream_payload,
+    model_reasoning_summary_stream_payloads,
+    model_reasoning_summary_text_stream_payload,
 )
 
 
@@ -32,6 +32,23 @@ def _capture_delta_error(loop, delta_error_future, delta_closed: threading.Event
             loop.call_soon_threadsafe(delta_error_future.set_exception, exc)
 
     return callback
+
+
+def _create_websocket_connection(url: str, headers: list[str], timeout_seconds: int):
+    try:
+        from websocket import create_connection
+    except ImportError as exc:
+        raise RuntimeError("Responses WebSocket mode requires the websocket-client package.") from exc
+    return create_connection(url, header=headers, timeout=timeout_seconds)
+
+
+def _websocket_url(base_url: str) -> str:
+    url = base_url.rstrip("/") + "/responses"
+    if url.startswith("https://"):
+        return "wss://" + url[len("https://"):]
+    if url.startswith("http://"):
+        return "ws://" + url[len("http://"):]
+    return url
 
 
 @dataclass(frozen=True)
@@ -197,11 +214,11 @@ class OpenAIResponsesRunner:
                 parsed_event_name, payload = parsed
                 item = accumulator.accept(parsed_event_name, payload)
                 if emit_raw_sse_event is not None:
-                    for live_event_name, live_payload in _live_events_for_sse_event(
+                    for stream_event_name, stream_payload in _model_stream_payloads_for_response_event(
                         parsed_event_name,
                         payload,
                     ):
-                        emit_raw_sse_event(live_event_name, live_payload)
+                        emit_raw_sse_event(stream_event_name, stream_payload)
                 if item["kind"] == "delta":
                     text = item["text"]
                     output_text.append(text)
@@ -238,6 +255,169 @@ class OpenAIResponsesRunner:
                 )
             return completed
         raise IncompleteResponseStreamError("OpenAI Responses stream ended before response.completed")
+
+
+@dataclass(frozen=True)
+class OpenAIWebSocketResponsesRunner(OpenAIResponsesRunner):
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_websocket", None)
+        object.__setattr__(self, "_websocket_lock", threading.Lock())
+
+    def _create_response_sync(
+        self,
+        request: dict[str, Any],
+        emit_delta=None,
+        emit_raw_sse_event=None,
+        cancel_event: threading.Event | None = None,
+    ) -> ModelResponse:
+        body = dict(request)
+        body.pop("stream", None)
+        body.pop("background", None)
+        body["type"] = "response.create"
+
+        with self._websocket_lock:
+            websocket = self._get_websocket()
+            try:
+                websocket.send(json.dumps(body))
+                return self._parse_websocket_response(
+                    websocket,
+                    emit_delta=emit_delta,
+                    emit_raw_sse_event=emit_raw_sse_event,
+                    cancel_event=cancel_event,
+                )
+            except IncompleteResponseStreamError:
+                self._close_websocket_unlocked()
+                raise
+            except TimeoutError:
+                self._close_websocket_unlocked()
+                raise
+            except Exception:
+                self._close_websocket_unlocked()
+                raise
+
+    def close(self) -> None:
+        with self._websocket_lock:
+            self._close_websocket_unlocked()
+
+    def _get_websocket(self):
+        websocket = self._websocket
+        if websocket is not None:
+            return websocket
+        websocket = _create_websocket_connection(
+            _websocket_url(self.base_url),
+            [
+                f"Authorization: Bearer {self.api_key}",
+                f"User-Agent: {self.user_agent}",
+            ],
+            self.timeout_seconds,
+        )
+        object.__setattr__(self, "_websocket", websocket)
+        return websocket
+
+    def _close_websocket_unlocked(self) -> None:
+        websocket = self._websocket
+        object.__setattr__(self, "_websocket", None)
+        if websocket is None:
+            return
+        close = getattr(websocket, "close", None)
+        if close is not None:
+            close()
+
+    def _parse_websocket_response(
+        self,
+        websocket,
+        *,
+        emit_delta,
+        emit_raw_sse_event=None,
+        cancel_event: threading.Event | None = None,
+    ) -> ModelResponse:
+        output_text: list[str] = []
+        tool_calls: list[ModelToolCall] = []
+        accumulator = StreamingResponseAccumulator()
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise TimeoutError("OpenAI Responses websocket stream was cancelled")
+            try:
+                raw_message = websocket.recv()
+            except Exception as exc:
+                raise IncompleteResponseStreamError(
+                    f"OpenAI Responses websocket stream ended before response.completed: {exc}"
+                ) from exc
+            payload = _parse_websocket_message(raw_message)
+            event_name = str(payload.get("type") or "")
+            if event_name == "error":
+                error = payload.get("error") or {}
+                code = error.get("code") or payload.get("status") or "websocket_error"
+                message = error.get("message") or json.dumps(payload, ensure_ascii=False)
+                raise RuntimeError(f"OpenAI Responses WebSocket failed: {code} {message}") from None
+            if emit_raw_sse_event is not None:
+                for stream_event_name, stream_payload in _model_stream_payloads_for_response_event(event_name, payload):
+                    emit_raw_sse_event(stream_event_name, stream_payload)
+            item = accumulator.accept(event_name, payload)
+            if item["kind"] == "delta":
+                text = item["text"]
+                output_text.append(text)
+                if emit_delta is not None:
+                    emit_delta(text)
+            elif item["kind"] == "tool_call":
+                tool_calls.append(item["tool_call"])
+            elif item["kind"] == "completed":
+                completed = item["response"]
+                if output_text and not completed.output_text:
+                    return ModelResponse(
+                        response_id=completed.response_id,
+                        output_text="".join(output_text),
+                        tool_calls=tool_calls or completed.tool_calls,
+                        usage=completed.usage,
+                        output_items=completed.output_items,
+                    )
+                if tool_calls and not completed.tool_calls:
+                    return ModelResponse(
+                        response_id=completed.response_id,
+                        output_text=completed.output_text,
+                        tool_calls=tool_calls,
+                        usage=completed.usage,
+                        output_items=completed.output_items,
+                    )
+                return completed
+
+
+def _parse_websocket_message(raw_message: str | bytes | None) -> dict[str, Any]:
+    if raw_message is None:
+        raise IncompleteResponseStreamError("OpenAI Responses websocket stream ended before response.completed")
+    if isinstance(raw_message, bytes):
+        raw_text = raw_message.decode("utf-8", errors="replace")
+    else:
+        raw_text = raw_message
+    if not raw_text.strip():
+        raise IncompleteResponseStreamError("OpenAI Responses websocket stream ended before response.completed")
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("OpenAI Responses WebSocket returned invalid JSON event") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("OpenAI Responses WebSocket returned non-object JSON event")
+    return payload
+
+
+def create_openai_responses_runner(
+    *,
+    transport: str = "http",
+    api_key: str,
+    base_url: str = "https://api.openai.com/v1",
+    timeout_seconds: int = 300,
+    total_timeout_seconds: float | None = None,
+    user_agent: str = "DeepDive/1.0",
+) -> OpenAIResponsesRunner:
+    normalized_transport = transport.strip().lower()
+    runner_cls = OpenAIWebSocketResponsesRunner if normalized_transport == "websocket_v2" else OpenAIResponsesRunner
+    return runner_cls(
+        api_key=api_key,
+        base_url=base_url,
+        timeout_seconds=timeout_seconds,
+        total_timeout_seconds=total_timeout_seconds,
+        user_agent=user_agent,
+    )
 
 
 def parse_response_payload(payload: dict[str, Any]) -> ModelResponse:
@@ -349,19 +529,19 @@ def _tool_call_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _live_payload_for_sse_event(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _model_stream_payload_for_response_event(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     if event_name == "response.completed":
-        return completed_live_payload(payload)
+        return completed_response_stream_payload(payload)
     return payload
 
 
-def _live_events_for_sse_event(
+def _model_stream_payloads_for_response_event(
     event_name: str,
     payload: dict[str, Any],
     *,
     include_completed_reasoning_summary: bool = True,
 ) -> list[tuple[str, dict[str, Any]]]:
-    summary_payload = model_reasoning_summary_text_live_payload(event_name, payload)
+    summary_payload = model_reasoning_summary_text_stream_payload(event_name, payload)
     if summary_payload is not None:
         return [summary_payload]
     if event_name == "response.completed":
@@ -369,9 +549,9 @@ def _live_events_for_sse_event(
         if include_completed_reasoning_summary:
             events.extend(
                 ("model_reasoning_summary", summary)
-                for summary in model_reasoning_summary_live_payloads(payload)
+                for summary in model_reasoning_summary_stream_payloads(payload)
             )
-        events.append(("response.completed", completed_live_payload(payload)))
+        events.append(("response.completed", completed_response_stream_payload(payload)))
         return events
     return [(event_name, payload)]
 

@@ -20,7 +20,7 @@ class AgentContextStore:
 
     async def load_context_items(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
         tree = await self._load_tree(session.snapshot_id) if session.snapshot_id else []
-        memory = await self._load_latest_memory(session.agent_id)
+        memory = await self.load_latest_memory_summary(agent_id=session.agent_id)
         items: list[dict[str, Any]] = [
             {
                 "role": "user",
@@ -102,7 +102,7 @@ class AgentContextStore:
             )
         return [row["path"] for row in result.mappings().all() if not is_secret_path(str(row["path"]))]
 
-    async def _load_latest_memory(self, agent_id: UUID) -> dict[str, Any] | None:
+    async def load_latest_memory_summary(self, *, agent_id: UUID) -> dict[str, Any] | None:
         async with self._connection() as connection:
             result = await connection.execute(
                 text(

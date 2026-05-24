@@ -98,6 +98,20 @@ CREATE TABLE agent_stream_events (
     created_at timestamptz not null
 );
 
+CREATE TABLE agent_context_items (
+    id uuid primary key default uuidv7(),
+    agent_id uuid not null references agent_sessions(id),
+    turn_id uuid references agent_turns(id),
+    seq bigint not null,
+    item_type text not null,
+    payload_json jsonb not null,
+    response_id text,
+    source text not null,
+    idempotency_key text,
+    compacted_at timestamptz,
+    created_at timestamptz not null
+);
+
 CREATE TABLE context_assemblies (
     id uuid primary key default uuidv7(),
     agent_id uuid not null references agent_sessions(id),
@@ -265,6 +279,16 @@ CREATE UNIQUE INDEX uq_agent_stream_events_analysis_seq
 
 CREATE INDEX ix_agent_stream_events_agent_seq
     ON agent_stream_events (agent_id, seq);
+
+CREATE UNIQUE INDEX uq_agent_context_items_agent_seq
+    ON agent_context_items (agent_id, seq);
+
+CREATE UNIQUE INDEX uq_agent_context_items_agent_idempotency
+    ON agent_context_items (agent_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX ix_agent_context_items_agent_compacted_seq
+    ON agent_context_items (agent_id, compacted_at, seq);
 
 CREATE INDEX ix_tool_calls_agent_status
     ON tool_calls (agent_id, status);

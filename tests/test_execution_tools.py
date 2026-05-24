@@ -2039,13 +2039,18 @@ class PostgresToolCallRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(params["claim_owner"]), 20)
 
     async def test_finalize_tool_call_updates_result_ref(self) -> None:
-        connection = FakeConnection(rows=[], scalar_values=[None, 1])
+        turn_id = new_uuid7()
+        connection = FakeConnection(
+            rows=[{"turn_id": turn_id, "openai_call_id": "call_1"}],
+            scalar_values=[None, 1, None, 2],
+        )
         repository = PostgresToolCallRepository(connection)
         tool_call_id = new_uuid7()
+        agent_id = new_uuid7()
 
         await repository.finalize_tool_call(
             analysis_id=new_uuid7(),
-            agent_id=new_uuid7(),
+            agent_id=agent_id,
             tool_call_id=tool_call_id,
             status="completed",
             result={"ok": True, "result_ref": f"tool-results/{tool_call_id}.json"},
@@ -2066,6 +2071,39 @@ class PostgresToolCallRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("claim_owner = :claim_owner", update_sql)
         self.assertEqual(update_params["result_ref"], f"tool-results/{tool_call_id}.json")
         self.assertEqual(update_params["claim_owner"], "owner-1")
+
+    async def test_finalize_tool_call_appends_function_output_context_item_through_shared_store(self) -> None:
+        turn_id = new_uuid7()
+        connection = FakeConnection(
+            rows=[{"turn_id": turn_id, "openai_call_id": "call_1"}],
+            scalar_values=[None, 2],
+        )
+        repository = PostgresToolCallRepository(connection)
+        tool_call_id = new_uuid7()
+        agent_id = new_uuid7()
+
+        await repository.finalize_tool_call(
+            analysis_id=new_uuid7(),
+            agent_id=agent_id,
+            tool_call_id=tool_call_id,
+            status="completed",
+            result={"ok": True, "result_ref": f"tool-results/{tool_call_id}.json"},
+            result_ref=f"tool-results/{tool_call_id}.json",
+            duration_ms=1,
+            permission_decision="allow",
+            error_code=None,
+            error_message=None,
+            claim_owner="owner-1",
+            event=EventEnvelope.new(event_type=EventType.TOOL_CALL_COMPLETED, payload={"tool_call_id": str(tool_call_id)}),
+        )
+
+        context_insert = _first_executed_params(connection, "INSERT INTO agent_context_items")
+        self.assertEqual(context_insert["agent_id"], agent_id)
+        self.assertEqual(context_insert["turn_id"], turn_id)
+        self.assertEqual(context_insert["item_type"], "function_call_output")
+        self.assertEqual(context_insert["payload_json"]["call_id"], "call_1")
+        self.assertIn(f"tool-results/{tool_call_id}.json", context_insert["payload_json"]["output"])
+        self.assertEqual(context_insert["idempotency_key"], "tool:function_call_output:call_1")
 
     async def test_finalize_tool_call_binds_claim_owner_as_text(self) -> None:
         connection = FakeConnection(rows=[], scalar_values=[None, 1])
@@ -2448,6 +2486,13 @@ class FakeResult:
 
     def first(self) -> dict | None:
         return self._rows[0] if self._rows else None
+
+
+def _first_executed_params(connection: FakeConnection, sql_fragment: str) -> dict:
+    for statement, params in connection.executed:
+        if sql_fragment in str(statement):
+            return params
+    raise AssertionError(f"SQL fragment not executed: {sql_fragment}")
 
 
 class FakeToolCallRepository:

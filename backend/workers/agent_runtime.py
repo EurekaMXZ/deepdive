@@ -4,12 +4,11 @@ from dataclasses import dataclass
 import os
 
 from backend.agent import AgentCommandHandler, ContextAssembler
-from backend.agent.openai_runner import OpenAIResponsesRunner
+from backend.agent.openai_runner import create_openai_responses_runner
 from backend.agent.repository import PostgresAgentRepository
 from backend.config import load_app_config_from_env, load_dotenv_if_exists
 from backend.db.runtime import create_database
 from backend.events.kafka import AiokafkaEventConsumer, AiokafkaEventProducer
-from backend.events.live_stream import KafkaLiveModelStreamPublisher
 from backend.events.runtime import run_consumer_forever, run_consumer_once
 from backend.storage import DEFAULT_OBJECT_BUCKET, MinioObjectStorage
 from backend.workers.asyncio_compat import run_async_worker
@@ -25,6 +24,7 @@ class AgentWorkerSettings:
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openai_user_agent: str = "DeepDive/1.0"
+    openai_transport: str = "http"
     openai_timeout_seconds: int = 300
     openai_total_timeout_seconds: float | None = None
     minio_endpoint: str = "localhost:9000"
@@ -37,7 +37,6 @@ class AgentWorkerSettings:
     error_backoff_seconds: float = 5.0
     max_attempts: int = 3
     event_heartbeat_interval_seconds: float = 60.0
-    live_stream_queue_size: int = 1000
 
 
 def build_agent_command_topics() -> tuple[str, ...]:
@@ -54,6 +53,7 @@ def load_agent_worker_settings() -> AgentWorkerSettings:
         openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
         openai_base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         openai_user_agent=os.environ.get("OPENAI_USER_AGENT", "DeepDive/1.0"),
+        openai_transport=os.environ.get("OPENAI_TRANSPORT", "http"),
         openai_timeout_seconds=int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "300")),
         openai_total_timeout_seconds=_optional_float_env(os.environ.get("OPENAI_TOTAL_TIMEOUT_SECONDS")),
         minio_endpoint=os.environ.get("MINIO_ENDPOINT", "localhost:9000"),
@@ -68,7 +68,6 @@ def load_agent_worker_settings() -> AgentWorkerSettings:
         event_heartbeat_interval_seconds=float(
             os.environ.get("AGENT_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", os.environ.get("WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS", "60"))
         ),
-        live_stream_queue_size=int(os.environ.get("LIVE_MODEL_STREAM_QUEUE_SIZE", "1000")),
     )
 
 
@@ -82,12 +81,8 @@ async def consume_once(settings: AgentWorkerSettings) -> int:
         group_id=settings.consumer_group,
     )
     dlq_producer = AiokafkaEventProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
-    live_producer = AiokafkaEventProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
-    live_stream_publisher = KafkaLiveModelStreamPublisher(live_producer, queue_size=settings.live_stream_queue_size)
     await consumer.start()
     await dlq_producer.start()
-    await live_producer.start()
-    await live_stream_publisher.start()
     try:
         repository = PostgresAgentRepository(database)
         handler = AgentCommandHandler(
@@ -102,16 +97,9 @@ async def consume_once(settings: AgentWorkerSettings) -> int:
                     secure=settings.minio_secure,
                 ),
             ),
-            responses_runner=OpenAIResponsesRunner(
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url,
-                user_agent=settings.openai_user_agent,
-                timeout_seconds=settings.openai_timeout_seconds,
-                total_timeout_seconds=settings.openai_total_timeout_seconds,
-            ),
+            responses_runner=_openai_runner(settings),
             config=load_app_config_from_env(),
             model_retry_attempts=settings.max_attempts,
-            live_stream_publisher=live_stream_publisher,
         )
         return await run_consumer_once(
             consumer=consumer,
@@ -125,11 +113,20 @@ async def consume_once(settings: AgentWorkerSettings) -> int:
             heartbeat_interval_seconds=settings.event_heartbeat_interval_seconds,
         )
     finally:
-        await live_stream_publisher.stop()
-        await live_producer.stop()
         await consumer.stop()
         await dlq_producer.stop()
         await database.dispose()
+
+
+def _openai_runner(settings: AgentWorkerSettings):
+    return create_openai_responses_runner(
+        transport=settings.openai_transport,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+        user_agent=settings.openai_user_agent,
+        timeout_seconds=settings.openai_timeout_seconds,
+        total_timeout_seconds=settings.openai_total_timeout_seconds,
+    )
 
 
 async def consume_forever(settings: AgentWorkerSettings) -> int:
@@ -142,12 +139,8 @@ async def consume_forever(settings: AgentWorkerSettings) -> int:
         group_id=settings.consumer_group,
     )
     dlq_producer = AiokafkaEventProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
-    live_producer = AiokafkaEventProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
-    live_stream_publisher = KafkaLiveModelStreamPublisher(live_producer, queue_size=settings.live_stream_queue_size)
     await consumer.start()
     await dlq_producer.start()
-    await live_producer.start()
-    await live_stream_publisher.start()
     try:
         repository = PostgresAgentRepository(database)
         handler = AgentCommandHandler(
@@ -162,16 +155,9 @@ async def consume_forever(settings: AgentWorkerSettings) -> int:
                     secure=settings.minio_secure,
                 ),
             ),
-            responses_runner=OpenAIResponsesRunner(
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url,
-                user_agent=settings.openai_user_agent,
-                timeout_seconds=settings.openai_timeout_seconds,
-                total_timeout_seconds=settings.openai_total_timeout_seconds,
-            ),
+            responses_runner=_openai_runner(settings),
             config=load_app_config_from_env(),
             model_retry_attempts=settings.max_attempts,
-            live_stream_publisher=live_stream_publisher,
         )
         return await run_consumer_forever(
             consumer=consumer,
@@ -184,8 +170,6 @@ async def consume_forever(settings: AgentWorkerSettings) -> int:
             heartbeat_interval_seconds=settings.event_heartbeat_interval_seconds,
         )
     finally:
-        await live_stream_publisher.stop()
-        await live_producer.stop()
         await consumer.stop()
         await dlq_producer.stop()
         await database.dispose()

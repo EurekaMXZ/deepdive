@@ -35,6 +35,7 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
                 "OPENAI_TIMEOUT_SECONDS": "12",
                 "OPENAI_TOTAL_TIMEOUT_SECONDS": "34",
                 "OPENAI_USER_AGENT": "DeepDive/custom",
+                "OPENAI_TRANSPORT": "websocket_v2",
                 "AGENT_WORKER_MAX_ATTEMPTS": "5",
             },
             clear=True,
@@ -51,6 +52,7 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
                 openai_api_key="test-key",
                 openai_base_url="https://api.example.test/v1",
                 openai_user_agent="DeepDive/custom",
+                openai_transport="websocket_v2",
                 minio_endpoint="localhost:9000",
                 minio_access_key="deepdive",
                 minio_secret_key="deepdive-secret",
@@ -99,10 +101,6 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
             async def __call__(self, event):
                 del event
 
-        class FakeResponsesRunner:
-            def __init__(self, **kwargs) -> None:
-                captured_runner_kwargs.append(kwargs)
-
         event = EventEnvelope.new(
             event_type=EventType.SNAPSHOT_READY,
             analysis_id=new_uuid7(),
@@ -117,6 +115,10 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
             captured_producers.append(producer)
             return producer
 
+        def fake_runner_factory(**kwargs):
+            captured_runner_kwargs.append(kwargs)
+            return object()
+
         async def run_test():
             with (
                 patch.object(runtime, "create_database", return_value=database),
@@ -124,7 +126,7 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
                 patch.object(runtime, "AiokafkaEventProducer", side_effect=fake_producer),
                 patch.object(runtime, "PostgresAgentRepository", FakeRepository),
                 patch.object(runtime, "ContextAssembler"),
-                patch.object(runtime, "OpenAIResponsesRunner", FakeResponsesRunner),
+                patch.object(runtime, "create_openai_responses_runner", side_effect=fake_runner_factory),
                 patch.object(runtime, "MinioObjectStorage"),
                 patch.object(runtime, "AgentCommandHandler", FakeHandler),
             ):
@@ -134,6 +136,7 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
                         kafka_bootstrap_servers="localhost:9092",
                         openai_api_key="test-key",
                         openai_user_agent="DeepDive/custom",
+                        openai_transport="websocket_v2",
                         max_messages=1,
                         max_attempts=7,
                     )
@@ -145,12 +148,12 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
 
         self.assertEqual(captured_repositories, [database])
         self.assertEqual(captured_handler_kwargs[0]["model_retry_attempts"], 7)
-        self.assertIn("live_stream_publisher", captured_handler_kwargs[0])
-        self.assertIsNotNone(captured_handler_kwargs[0]["live_stream_publisher"])
+        self.assertNotIn("live_stream_publisher", captured_handler_kwargs[0])
         self.assertEqual(captured_runner_kwargs[0]["user_agent"], "DeepDive/custom")
-        self.assertEqual(len(captured_producers), 2)
-        self.assertEqual([producer.starts for producer in captured_producers], [1, 1])
-        self.assertEqual([producer.stops for producer in captured_producers], [1, 1])
+        self.assertEqual(captured_runner_kwargs[0]["transport"], "websocket_v2")
+        self.assertEqual(len(captured_producers), 1)
+        self.assertEqual([producer.starts for producer in captured_producers], [1])
+        self.assertEqual([producer.stops for producer in captured_producers], [1])
 
 
 if __name__ == "__main__":

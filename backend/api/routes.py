@@ -20,11 +20,9 @@ from backend.api.sse import (
     event_payload,
     event_seq,
     event_type_of,
-    format_live_model_sse_event,
     format_sse_event,
     is_terminal_stream_event,
     parse_last_event_id,
-    should_emit_live_model_event,
 )
 from backend.api.services import AnalysisRecord, InMemoryAnalysisService, encode_list_cursor, maybe_await
 from backend.api.stream_schemas import TERMINAL_ANALYSIS_STATUSES, status_event_payload
@@ -33,14 +31,6 @@ from backend.ids import new_uuid7
 
 def get_analysis_service(request: Request) -> InMemoryAnalysisService:
     return request.app.state.analysis_service
-
-
-def get_live_stream_hub(request: Request):
-    return getattr(request.app.state, "live_stream_hub", None)
-
-
-def get_show_model_reasoning_summary(request: Request) -> bool:
-    return bool(getattr(request.app.state, "show_model_reasoning_summary", True))
 
 
 router = APIRouter()
@@ -140,9 +130,8 @@ async def stream_analysis_events(
     idle_timeout_seconds: float = Query(default=30.0, ge=0, le=300),
     debug_raw_llm_events: bool = Query(default=False),
     service: InMemoryAnalysisService = Depends(get_analysis_service),
-    live_stream_hub=Depends(get_live_stream_hub),
-    show_model_reasoning_summary: bool = Depends(get_show_model_reasoning_summary),
 ) -> StreamingResponse:
+    del debug_raw_llm_events
     record = await maybe_await(service.get(analysis_id))
     if record is None:
         raise _not_found()
@@ -151,15 +140,12 @@ async def stream_analysis_events(
     if events_method is not None:
         if getattr(service, "supports_live_events", False):
             return StreamingResponse(
-                _live_sse_event_records(
+                _polling_sse_event_records(
                     service,
                     analysis_id,
                     after_seq=after_seq,
                     poll_interval_seconds=poll_interval_seconds,
                     idle_timeout_seconds=idle_timeout_seconds,
-                    live_stream_hub=live_stream_hub,
-                    debug_raw_llm_events=debug_raw_llm_events,
-                    show_model_reasoning_summary=show_model_reasoning_summary,
                 ),
                 media_type="text/event-stream",
             )
@@ -196,94 +182,53 @@ def _sse_event_records(events: Iterable) -> Iterator[str]:
         yield _format_sse_event(event)
 
 
-async def _live_sse_event_records(
+async def _polling_sse_event_records(
     service: InMemoryAnalysisService,
     analysis_id: UUID,
     *,
     after_seq: int,
     poll_interval_seconds: float,
     idle_timeout_seconds: float,
-    live_stream_hub=None,
-    debug_raw_llm_events: bool = False,
-    show_model_reasoning_summary: bool = True,
 ) -> AsyncIterator[str]:
     last_seq = after_seq
     loop = asyncio.get_running_loop()
     idle_deadline = loop.time() + idle_timeout_seconds
     status_method = getattr(service, "analysis_status", None)
-    live_subscription = live_stream_hub.subscribe(analysis_id) if live_stream_hub is not None else None
+    while True:
+        events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
+        emitted = False
+        terminal_event_seen = False
+        for event in events:
+            seq = event_seq(event)
+            last_seq = max(last_seq, seq)
+            emitted = True
+            terminal_event_seen = is_terminal_stream_event(event) or terminal_event_seen
+            yield format_sse_event(event)
 
-    try:
-        while True:
-            if live_subscription is not None:
-                try:
-                    live_event = live_subscription.get_nowait()
-                    if not should_emit_live_model_event(
-                        live_event,
-                        debug_raw_llm_events=debug_raw_llm_events,
-                        show_model_reasoning_summary=show_model_reasoning_summary,
-                    ):
-                        continue
-                    idle_deadline = loop.time() + idle_timeout_seconds
-                    yield format_live_model_sse_event(live_event)
-                    continue
-                except asyncio.QueueEmpty:
-                    pass
+        if emitted:
+            idle_deadline = loop.time() + idle_timeout_seconds
+        if terminal_event_seen:
+            return
 
-            events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
-            emitted = False
-            terminal_event_seen = False
-            for event in events:
-                seq = event_seq(event)
-                last_seq = max(last_seq, seq)
-                emitted = True
-                terminal_event_seen = is_terminal_stream_event(event) or terminal_event_seen
-                yield format_sse_event(event)
-
-            if emitted:
-                idle_deadline = loop.time() + idle_timeout_seconds
-            if terminal_event_seen:
-                return
-
-            if live_subscription is not None:
-                timeout = 0 if poll_interval_seconds <= 0 else poll_interval_seconds
-                try:
-                    live_event = await asyncio.wait_for(live_subscription.get(), timeout=timeout)
-                    if not should_emit_live_model_event(
-                        live_event,
-                        debug_raw_llm_events=debug_raw_llm_events,
-                        show_model_reasoning_summary=show_model_reasoning_summary,
-                    ):
-                        continue
-                    idle_deadline = loop.time() + idle_timeout_seconds
-                    yield format_live_model_sse_event(live_event)
-                    continue
-                except asyncio.TimeoutError:
-                    pass
-
-            if status_method is not None:
-                current_status = await maybe_await(status_method(analysis_id))
-                if current_status in TERMINAL_ANALYSIS_STATUSES:
-                    events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
-                    for event in events:
-                        seq = event_seq(event)
-                        last_seq = max(last_seq, seq)
-                        terminal_event_seen = is_terminal_stream_event(event) or terminal_event_seen
-                        yield format_sse_event(event)
-                    if terminal_event_seen:
-                        return
+        if status_method is not None:
+            current_status = await maybe_await(status_method(analysis_id))
+            if current_status in TERMINAL_ANALYSIS_STATUSES:
+                events = await maybe_await(service.stream_events(analysis_id, after_seq=last_seq))
+                for event in events:
+                    seq = event_seq(event)
+                    last_seq = max(last_seq, seq)
+                    terminal_event_seen = is_terminal_stream_event(event) or terminal_event_seen
+                    yield format_sse_event(event)
+                if terminal_event_seen:
                     return
-            if loop.time() >= idle_deadline:
-                yield ": keepalive\n\n"
-                idle_deadline = loop.time() + idle_timeout_seconds
-            if live_subscription is None:
-                if poll_interval_seconds > 0:
-                    await asyncio.sleep(poll_interval_seconds)
-                else:
-                    await asyncio.sleep(0)
-    finally:
-        if live_subscription is not None:
-            live_subscription.close()
+                return
+        if loop.time() >= idle_deadline:
+            yield ": keepalive\n\n"
+            idle_deadline = loop.time() + idle_timeout_seconds
+        if poll_interval_seconds > 0:
+            await asyncio.sleep(poll_interval_seconds)
+        else:
+            await asyncio.sleep(0)
 
 
 def _format_sse_event(event) -> str:

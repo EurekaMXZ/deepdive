@@ -19,26 +19,6 @@ class ApiStreamContractsTest(unittest.TestCase):
         )
         self.assertTrue(is_terminal_stream_event(event))
 
-    def test_live_model_stream_events_are_formatted_without_replay_id(self) -> None:
-        from backend.api.sse import format_live_model_sse_event
-        from backend.events.live_stream import LiveModelStreamEvent
-        from backend.ids import new_uuid7
-
-        event = LiveModelStreamEvent.new(
-            analysis_id=new_uuid7(),
-            agent_id=new_uuid7(),
-            turn_id=new_uuid7(),
-            attempt=1,
-            stream_seq=8,
-            event_name="response.output_text.delta",
-            payload={"type": "response.output_text.delta", "delta": "分析"},
-        )
-
-        self.assertEqual(
-            format_live_model_sse_event(event),
-            'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"分析"}\n\n',
-        )
-
     def test_tool_events_are_formatted_with_frontend_safe_minimum_payloads(self) -> None:
         from backend.api.sse import format_sse_event
 
@@ -96,6 +76,12 @@ class ApiStreamContractsTest(unittest.TestCase):
             error_event_payload(code="MODEL_FAILED", message="model failed", retryable=True),
             {"error": {"code": "MODEL_FAILED", "message": "model failed", "retryable": True}},
         )
+
+    def test_sse_contract_does_not_expose_live_model_kafka_formatters(self) -> None:
+        import backend.api.sse as sse
+
+        self.assertFalse(hasattr(sse, "format_live_model_sse_event"))
+        self.assertFalse(hasattr(sse, "should_emit_live_model_event"))
 
 
 class EventContractsTest(unittest.TestCase):

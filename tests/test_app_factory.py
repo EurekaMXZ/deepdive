@@ -43,13 +43,15 @@ class AppFactoryTest(unittest.TestCase):
 
         self.assertIsInstance(app.state.analysis_service, PostgresAnalysisService)
 
-    def test_create_postgres_app_exposes_reasoning_summary_display_config(self) -> None:
+    def test_create_postgres_app_does_not_expose_live_model_stream_state(self) -> None:
         app = create_postgres_app(
             database_url="postgresql+psycopg://deepdive:deepdive@localhost:5432/deepdive",
             config=AppConfig(openai=OpenAIConfig(show_reasoning_summary=False)),
         )
 
-        self.assertFalse(app.state.show_model_reasoning_summary)
+        self.assertFalse(hasattr(app.state, "live_stream_hub"))
+        self.assertFalse(hasattr(app.state, "live_stream_subscriber"))
+        self.assertFalse(hasattr(app.state, "show_model_reasoning_summary"))
 
 
 if __name__ == "__main__":

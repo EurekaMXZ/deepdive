@@ -243,6 +243,344 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         refs = repository.latest_context_assembly["source_refs_json"]
         self.assertNotIn("instructions/frontend.md", [ref["ref"] for ref in refs])
 
+    async def test_context_includes_local_replay_history_when_requested(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=2,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            uncompacted_context_items=[
+                {
+                    "seq": 1,
+                    "item_type": "function_call",
+                    "payload_json": {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "read_file",
+                        "arguments": "{\"path\":\"package.json\"}",
+                    },
+                },
+                {
+                    "seq": 2,
+                    "item_type": "function_call_output",
+                    "payload_json": {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": "{\"ok\":true,\"result\":{\"path\":\"package.json\",\"content\":\"vite\"}}",
+                    },
+                },
+            ],
+            latest_memory_summary={
+                "completed_steps": ["已查看 README"],
+                "confirmed_facts": ["这是 Vite 项目"],
+                "next_action": "继续查看 src/App.tsx",
+            },
+        )
+
+        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+            include_local_history=True,
+        )
+
+        context_text = "\n".join(_text_parts(context["input"]))
+        replayed_payloads = [item for item in context["input"] if item.get("type") in {"function_call", "function_call_output"}]
+        self.assertIn("本地持久化的模型可见历史", context_text)
+        self.assertIn("不要重新开始", context_text)
+        self.assertEqual([item["type"] for item in replayed_payloads], ["function_call", "function_call_output"])
+        self.assertEqual(replayed_payloads[0]["name"], "read_file")
+        self.assertIn("package.json", replayed_payloads[0]["arguments"])
+        self.assertIn("这是 Vite 项目", context_text)
+
+    async def test_local_replay_does_not_duplicate_compacted_memory_summary(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=2,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            context_items=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "已 compact 的上下文摘要：\n{\"next_action\":\"继续检查 src\"}",
+                        }
+                    ],
+                }
+            ],
+            uncompacted_context_items=[
+                {
+                    "seq": 3,
+                    "item_type": "function_call_output",
+                    "payload_json": {
+                        "type": "function_call_output",
+                        "call_id": "call_2",
+                        "output": "{\"ok\":true}",
+                    },
+                }
+            ],
+            latest_memory_summary={"next_action": "继续检查 src"},
+        )
+
+        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+            include_local_history=True,
+        )
+
+        context_text = "\n".join(_text_parts(context["input"]))
+        replayed_outputs = [item for item in context["input"] if item.get("type") == "function_call_output"]
+        self.assertEqual(context_text.count("已 compact 的上下文摘要"), 1)
+        self.assertIn("本地持久化的模型可见历史", context_text)
+        self.assertEqual([item["call_id"] for item in replayed_outputs], ["call_2"])
+
+    async def test_context_omits_local_replay_history_for_previous_response_id_path(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=2,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            uncompacted_context_items=[
+                {
+                    "seq": 1,
+                    "item_type": "function_call",
+                    "payload_json": {"type": "function_call", "name": "read_file"},
+                }
+            ],
+            latest_memory_summary={"confirmed_facts": ["不要出现在 previous_response_id 路径"]},
+        )
+
+        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+            include_local_history=False,
+        )
+
+        self.assertNotIn("本地持久化的模型可见历史", "\n".join(_text_parts(context["input"])))
+
+    async def test_context_excludes_extra_item_call_ids_from_local_replay_history(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="waiting_tool",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=1,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            uncompacted_context_items=[
+                {
+                    "seq": 1,
+                    "item_type": "function_call_output",
+                    "payload_json": {
+                        "type": "function_call_output",
+                        "call_id": "call_current",
+                        "output": "{\"ok\":true,\"result\":{\"path\":\"README.md\"}}",
+                    },
+                },
+                {
+                    "seq": 2,
+                    "item_type": "function_call_output",
+                    "payload_json": {
+                        "type": "function_call_output",
+                        "call_id": "call_previous",
+                        "output": "{\"ok\":true,\"result\":{\"path\":\"src/App.tsx\"}}",
+                    },
+                },
+            ],
+        )
+
+        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+            extra_items=[
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_current",
+                    "output": "{\"ok\":true}",
+                }
+            ],
+            include_local_history=True,
+        )
+
+        replayed_outputs = [item for item in context["input"] if item.get("type") == "function_call_output"]
+        self.assertEqual([item["call_id"] for item in replayed_outputs], ["call_current", "call_previous"])
+        replayed_history_outputs = [item for item in replayed_outputs if item["call_id"] != "call_current"]
+        self.assertEqual([item["call_id"] for item in replayed_history_outputs], ["call_previous"])
+
+    async def test_local_replay_reconstructs_responses_items_instead_of_json_text_dump(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="waiting_tool",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=2,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            uncompacted_context_items=[
+                {
+                    "seq": 1,
+                    "item_type": "function_call",
+                    "payload_json": {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "read_file",
+                        "arguments": "{\"path\":\"README.md\"}",
+                    },
+                },
+                {
+                    "seq": 2,
+                    "item_type": "function_call_output",
+                    "payload_json": {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": "{\"ok\":true,\"result\":{\"path\":\"README.md\"}}",
+                    },
+                },
+            ],
+        )
+
+        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+            include_local_history=True,
+        )
+
+        function_call_items = [item for item in context["input"] if item.get("type") == "function_call"]
+        function_output_items = [item for item in context["input"] if item.get("type") == "function_call_output"]
+        replay_text = "\n".join(text for text in _text_parts(context["input"]) if "本地持久化" in text)
+        self.assertEqual(function_call_items, [repository.uncompacted_context_items[0]["payload_json"]])
+        self.assertEqual(function_output_items, [repository.uncompacted_context_items[1]["payload_json"]])
+        self.assertNotIn("\"payload\"", replay_text)
+
+    async def test_auto_compaction_summary_uses_configured_goal_not_hardcoded_repo_analysis(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=2,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 1},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            context_item_batches=[
+                [{"role": "user", "content": "当前任务是修复 previous_response_id 上下文重放问题。" * 20}],
+                [{"role": "user", "content": "compact 后继续当前修复任务。"}],
+            ],
+            uncompacted_context_items=[
+                {
+                    "seq": 1,
+                    "item_type": "function_call_output",
+                    "payload_json": {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": "{\"ok\":true,\"result\":{\"path\":\"backend/agent/context.py\"}}",
+                    },
+                }
+            ],
+            config_snapshot_json={
+                "analysis": {
+                    "default_profile": "context_replay_fix",
+                    "profiles": {
+                        "context_replay_fix": {
+                            "goal_file": "profiles/context_replay_fix.md",
+                            "goal": "修复 previous_response_id 上下文重放问题。",
+                            "max_turns": 10,
+                            "max_tool_calls": 50,
+                            "auto_compact_threshold_tokens": 1,
+                        }
+                    },
+                }
+            },
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_1",
+                output_text="done",
+                tool_calls=[],
+                usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=repository.session.snapshot_id,
+                payload={},
+            )
+        )
+
+        summary = repository.memory_summaries[0]["summary_json"]
+        self.assertEqual(summary["goal"], "修复 previous_response_id 上下文重放问题。")
+        self.assertNotEqual(summary["next_action"], "继续基于工具结果分析仓库。")
+        self.assertNotIn("分析仓库源码结构", json.dumps(summary, ensure_ascii=False))
+
     async def test_context_uses_config_snapshot_prompt_and_enabled_tools(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
@@ -542,16 +880,17 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         )
 
         event_types = [event["event_type"] for event in repository.stream_events]
-        self.assertEqual(event_types, ["status", "done"])
-        self.assertEqual(repository.stream_events[1]["payload"], {"status": "completed", "response_id": "resp_1", "output_ref": f"agent-outputs/{agent_id}/{turn_id}.json"})
+        self.assertEqual(event_types, ["status", "delta", "done"])
+        self.assertEqual(repository.stream_events[1]["payload"], {"text": "分析完成"})
+        self.assertEqual(repository.stream_events[1]["response_id"], "resp_1")
+        self.assertEqual(repository.stream_events[2]["payload"], {"status": "completed", "response_id": "resp_1", "output_ref": f"agent-outputs/{agent_id}/{turn_id}.json"})
         self.assertEqual(repository.completed_text, "分析完成")
 
-    async def test_raw_model_stream_events_are_published_live_without_persisting_token_events(self) -> None:
+    async def test_raw_model_stream_events_are_not_published_live_and_final_output_is_persisted(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         snapshot_id = new_uuid7()
         turn_id = new_uuid7()
-        live_publisher = FakeLiveModelStreamPublisher()
         repository = FakeAgentRepository(
             session=AgentSessionState(
                 analysis_id=analysis_id,
@@ -619,7 +958,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
             responses_runner=runner,
             config=AppConfig.default(),
-            live_stream_publisher=live_publisher,
         )
 
         await handler(
@@ -634,17 +972,13 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
 
         event_types = [event["event_type"] for event in repository.stream_events]
         self.assertEqual(event_types, ["status", "tool_call"])
-        self.assertEqual([event["event_name"] for event in live_publisher.events], ["response.function_call_arguments.delta", "response.output_text.delta", "response.completed"])
-        self.assertEqual(live_publisher.events[0]["payload"]["delta"], "{\"path\":")
-        self.assertEqual(live_publisher.events[1]["payload"]["delta"], "正在分析")
-        self.assertEqual(live_publisher.events[2]["payload"], {"type": "response.completed", "response_id": "resp_1"})
+        self.assertNotIn("delta", event_types)
 
-    async def test_reasoning_summary_is_published_as_live_model_summary_event(self) -> None:
+    async def test_reasoning_summary_is_persisted_without_live_model_summary_event(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         snapshot_id = new_uuid7()
         turn_id = new_uuid7()
-        live_publisher = FakeLiveModelStreamPublisher()
         repository = FakeAgentRepository(
             session=AgentSessionState(
                 analysis_id=analysis_id,
@@ -704,7 +1038,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
             responses_runner=runner,
             config=AppConfig.default(),
-            live_stream_publisher=live_publisher,
         )
 
         await handler(
@@ -717,19 +1050,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertEqual(
-            [event["event_name"] for event in live_publisher.events],
-            ["model_reasoning_summary", "response.completed"],
-        )
-        self.assertEqual(
-            live_publisher.events[0]["payload"],
-            {
-                "type": "model_reasoning_summary",
-                "text": "我会先查看仓库结构，再读取入口文件。",
-                "item_id": "rs_1",
-                "response_id": "resp_1",
-            },
-        )
         persisted_summary_events = [
             event for event in repository.stream_events if event["event_type"] == "model_reasoning_summary"
         ]
@@ -844,7 +1164,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         agent_id = new_uuid7()
         snapshot_id = new_uuid7()
         turn_id = new_uuid7()
-        live_publisher = FakeLiveModelStreamPublisher()
         repository = FakeAgentRepository(
             session=AgentSessionState(
                 analysis_id=analysis_id,
@@ -920,7 +1239,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
             responses_runner=runner,
             config=AppConfig.default(),
-            live_stream_publisher=live_publisher,
         )
 
         await handler(
@@ -933,25 +1251,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertEqual(
-            [event["event_name"] for event in live_publisher.events],
-            [
-                "model_reasoning_summary.delta",
-                "model_reasoning_summary.delta",
-                "model_reasoning_summary",
-                "model_reasoning_summary.done",
-                "response.completed",
-            ],
-        )
-        self.assertEqual(
-            live_publisher.events[2]["payload"],
-            {
-                "type": "model_reasoning_summary",
-                "text": "我将读取仓库结构。",
-                "item_id": "rs_1",
-                "response_id": "resp_1",
-            },
-        )
         persisted_summary_events = [
             event for event in repository.stream_events if event["event_type"].startswith("model_reasoning_summary")
         ]
@@ -971,7 +1270,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         agent_id = new_uuid7()
         snapshot_id = new_uuid7()
         turn_id = new_uuid7()
-        live_publisher = FakeLiveModelStreamPublisher()
         repository = FakeAgentRepository(
             session=AgentSessionState(
                 analysis_id=analysis_id,
@@ -1026,7 +1324,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
             responses_runner=runner,
             config=AppConfig.default(),
-            live_stream_publisher=live_publisher,
         )
 
         await handler(
@@ -1039,7 +1336,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertEqual([event["event_name"] for event in live_publisher.events], ["response.completed"])
+        self.assertFalse(any(event["event_type"] == "model_reasoning_summary" for event in repository.stream_events))
 
     async def test_model_completion_does_not_publish_done_when_terminal_update_is_rejected(self) -> None:
         analysis_id = new_uuid7()
@@ -1453,7 +1750,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.requests[0]["input"][-1]["call_id"], "call_1")
         self.assertNotIn("previous_response_id", runner.requests[0])
 
-    async def test_previous_response_id_uses_session_runtime_snapshot_not_current_config(self) -> None:
+    async def test_previous_response_id_uses_session_runtime_snapshot_without_transport_branching(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         snapshot_id = new_uuid7()
@@ -2732,14 +3029,6 @@ class StreamingRawSseEventsRunner(ResponsesRunner):
         return self._response
 
 
-class FakeLiveModelStreamPublisher:
-    def __init__(self) -> None:
-        self.events: list[dict] = []
-
-    async def publish_event(self, **kwargs) -> None:
-        self.events.append(kwargs)
-
-
 class FakeStorage:
     def __init__(self, objects: dict[str, bytes] | None = None) -> None:
         self.objects = objects or {}
@@ -2772,6 +3061,8 @@ class FakeAgentRepository(AgentRepository):
         terminal_update_allowed: bool = True,
         tool_call_count: int = 0,
         context_item_batches: list[list[dict]] | None = None,
+        uncompacted_context_items: list[dict] | None = None,
+        latest_memory_summary: dict | None = None,
         refreshed_session: AgentSessionState | None = None,
     ) -> None:
         self.session = session
@@ -2782,6 +3073,8 @@ class FakeAgentRepository(AgentRepository):
         self.pending_tool_output = pending_tool_output
         self.context_items = context_items
         self.context_item_batches = list(context_item_batches or [])
+        self.uncompacted_context_items = list(uncompacted_context_items or [])
+        self.latest_memory_summary = latest_memory_summary
         self.instruction_files = instruction_files or []
         self.config_snapshot_json = config_snapshot_json
         self.handled_event_ids = handled_event_ids or set()
@@ -2827,7 +3120,29 @@ class FakeAgentRepository(AgentRepository):
             return list(self.context_item_batches.pop(0))
         if self.context_items is not None:
             return list(self.context_items)
-        return [{"role": "user", "content": "分析这个仓库。"}]
+        items = [{"role": "user", "content": "分析这个仓库。"}]
+        if self.latest_memory_summary is not None:
+            items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "已 compact 的上下文摘要：\n"
+                            + json.dumps(self.latest_memory_summary, ensure_ascii=False),
+                        }
+                    ],
+                }
+            )
+        return items
+
+    async def load_uncompacted_context_items(self, *, agent_id, limit=12):
+        del agent_id, limit
+        return list(self.uncompacted_context_items)
+
+    async def load_latest_memory_summary(self, *, agent_id):
+        del agent_id
+        return self.latest_memory_summary
 
     async def load_instruction_files(self, *, session: AgentSessionState) -> list[dict]:
         del session
@@ -2958,8 +3273,31 @@ class FakeAgentRepository(AgentRepository):
     async def add_memory_summary(self, **kwargs):
         self.memory_summaries.append(kwargs)
 
+    async def compact_context_items(self, **kwargs):
+        self.memory_summaries.append(kwargs)
+        compacted_until_seq = int(kwargs["compacted_until_seq"])
+        self.uncompacted_context_items = [
+            item
+            for item in self.uncompacted_context_items
+            if int(item.get("seq") or 0) > compacted_until_seq
+        ]
+
     async def add_outbox(self, event: EventEnvelope):
         self.outbox_events.append(event)
+
+
+def _text_parts(input_items: list[dict]) -> list[str]:
+    texts: list[str] = []
+    for item in input_items:
+        content = item.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+            continue
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    texts.append(part["text"])
+    return texts
 
 
 if __name__ == "__main__":

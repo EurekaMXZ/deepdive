@@ -36,6 +36,7 @@ class DatabaseMigrationTest(unittest.TestCase):
                 "effective_runtime_json",
             ],
             "agent_stream_events": ["payload_json"],
+            "agent_context_items": ["payload_json"],
             "context_assemblies": ["source_refs_json"],
             "tool_calls": ["arguments_json"],
             "memory_summaries": [
@@ -76,6 +77,22 @@ class DatabaseMigrationTest(unittest.TestCase):
         self.assertRegex(stream_body, r"\battempt\s+integer\b")
         self.assertRegex(stream_body, r"\bresponse_id\s+text\b")
         self.assertRegex(stream_body, r"\bstate\s+text\b")
+        context_items_body = _create_table_body(sql, "agent_context_items")
+        self.assertRegex(context_items_body, r"\bseq\s+bigint\s+not\s+null\b")
+        self.assertRegex(context_items_body, r"\bitem_type\s+text\s+not\s+null\b")
+        self.assertRegex(context_items_body, r"\bpayload_json\s+jsonb\s+not\s+null\b")
+        self.assertRegex(context_items_body, r"\bidempotency_key\s+text\b")
+        self.assertRegex(context_items_body, r"\bcompacted_at\s+timestamptz\b")
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_agent_context_items_agent_seq\s+on\s+agent_context_items"
+            r"\s+\(agent_id,\s*seq\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_agent_context_items_agent_idempotency\s+on\s+agent_context_items"
+            r"\s+\(agent_id,\s*idempotency_key\)",
+        )
         self.assertRegex(
             sql,
             r"create\s+unique\s+index\s+uq_agent_turns_agent_trigger_event\s+on\s+agent_turns"
@@ -131,6 +148,7 @@ class DatabaseMigrationTest(unittest.TestCase):
             "ix_analyses_status_updated_at": "analyses",
             "ix_agent_sessions_analysis_id": "agent_sessions",
             "ix_agent_turns_agent_turn_index": "agent_turns",
+            "ix_agent_context_items_agent_compacted_seq": "agent_context_items",
             "ix_agent_stream_events_agent_seq": "agent_stream_events",
             "ix_tool_calls_agent_status": "tool_calls",
             "ix_tool_calls_claim_expires_at": "tool_calls",

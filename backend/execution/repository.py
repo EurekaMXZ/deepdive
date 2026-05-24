@@ -9,10 +9,17 @@ from uuid import UUID
 from sqlalchemy import String, bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
+from backend.agent.context_items import (
+    FUNCTION_CALL_OUTPUT_ITEM_TYPE,
+    TOOL_CONTEXT_SOURCE,
+    append_context_item_on_connection,
+    function_call_output_payload,
+    tool_output_idempotency_key,
+)
+from backend.db.connections import connection_from
 from backend.events import EventEnvelope
 from backend.events.repositories import DbOutboxSink
 from backend.execution import SnapshotToolRepository
-from backend.db.connections import connection_from
 from backend.ids import new_uuid7
 from backend.security import visible_path_sql
 
@@ -461,6 +468,12 @@ class PostgresToolCallRepository:
             )
             if not updated:
                 return False
+            await _append_tool_result_context_item(
+                connection,
+                agent_id=agent_id,
+                tool_call_id=tool_call_id,
+                result=result,
+            )
             await self._add_stream_event_on_connection(
                 connection,
                 analysis_id=analysis_id,
@@ -574,6 +587,38 @@ async def _update_terminal_tool_call(
         },
     )
     return int(getattr(result, "rowcount", 0) or 0) > 0
+
+
+async def _append_tool_result_context_item(
+    connection,
+    *,
+    agent_id: UUID,
+    tool_call_id: UUID,
+    result: dict[str, Any],
+) -> None:
+    lookup = await connection.execute(
+        text(
+            """
+            SELECT turn_id, openai_call_id
+            FROM tool_calls
+            WHERE id = :tool_call_id
+            """
+        ),
+        {"tool_call_id": tool_call_id},
+    )
+    row = lookup.mappings().first()
+    if row is None:
+        return
+    await append_context_item_on_connection(
+        connection,
+        agent_id=agent_id,
+        turn_id=row["turn_id"],
+        item_type=FUNCTION_CALL_OUTPUT_ITEM_TYPE,
+        payload=function_call_output_payload(call_id=row["openai_call_id"], output=result),
+        response_id=None,
+        source=TOOL_CONTEXT_SOURCE,
+        idempotency_key=tool_output_idempotency_key(row["openai_call_id"]),
+    )
 
 
 def _cursor_offset(value: str | None) -> int:

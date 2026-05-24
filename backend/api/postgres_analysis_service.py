@@ -385,6 +385,7 @@ class PostgresAnalysisService:
             "service_tier": self._config.openai.service_tier,
             "parallel_tool_calls": self._config.openai.parallel_tool_calls,
             "use_previous_response_id": self._config.openai.use_previous_response_id,
+            "transport": self._config.openai.transport,
         }
 
 

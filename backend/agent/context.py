@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from backend.agent.models import AgentSessionState, ModelResponse
-from backend.agent.ports import AgentRepository
+from backend.agent.ports import ContextAssemblyRepository
 from backend.config import app_config_from_json
 from backend.execution import ToolRegistry
 
@@ -22,13 +22,26 @@ DEFAULT_DEVELOPER_INSTRUCTION = (
 
 
 class ContextAssembler:
-    def __init__(self, *, repository: AgentRepository, storage) -> None:
+    def __init__(self, *, repository: ContextAssemblyRepository, storage) -> None:
         self._repository = repository
         self._storage = storage
 
-    async def assemble(self, *, session: AgentSessionState, turn_id: UUID, extra_items: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    async def assemble(
+        self,
+        *,
+        session: AgentSessionState,
+        turn_id: UUID,
+        extra_items: list[dict[str, Any]] | None = None,
+        include_local_history: bool = False,
+    ) -> dict[str, Any]:
         input_items = await self._repository.load_context_items(session=session)
         input_items.extend(extra_items or [])
+        if include_local_history:
+            local_history_items = await self._local_history_context_items(
+                session=session,
+                exclude_call_ids=_call_ids_from_items(extra_items or []),
+            )
+            input_items.extend(local_history_items)
         config = app_config_from_json(await self._repository.load_config_snapshot(session=session))
         profile = config.analysis.profiles[config.analysis.default_profile]
         system_instruction = config.prompt.system_instruction or DEFAULT_SYSTEM_INSTRUCTION
@@ -84,6 +97,67 @@ class ContextAssembler:
             "token_estimate": token_estimate,
             "include": ["web_search_call.action.sources"] if config.tools.openai_web_search.enabled and config.tools.openai_web_search.include_sources else [],
         }
+
+    async def _local_history_context_items(self, *, session: AgentSessionState, exclude_call_ids: set[str] | None = None) -> list[dict[str, Any]]:
+        context_items = await self._repository.load_uncompacted_context_items(agent_id=session.agent_id, limit=24)
+        if exclude_call_ids:
+            context_items = [
+                item
+                for item in context_items
+                if _context_item_call_id(item) not in exclude_call_ids
+            ]
+        if not context_items:
+            return []
+
+        replay_items: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "\n".join(
+                            [
+                                "以下是本地持久化的模型可见历史，用于在未使用 previous_response_id 时继续任务。",
+                                "不要重新开始；不要重复已经完成的工具调用，除非需要补充证据。",
+                                "HTTP 和 WebSocket 只是请求传输层；这里的历史用于本地上下文重放。",
+                            ]
+                        ),
+                    }
+                ],
+            }
+        ]
+        fallback_lines: list[str] = []
+        for item in context_items:
+            payload = item.get("payload_json")
+            if _is_replayable_context_payload(payload):
+                replay_items.append(payload)
+            else:
+                fallback_lines.append(
+                    json.dumps(
+                        {
+                            "seq": item.get("seq"),
+                            "item_type": item.get("item_type"),
+                            "source": item.get("source"),
+                            "response_id": item.get("response_id"),
+                            "payload": payload,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+        if fallback_lines:
+            replay_items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "以下历史 item 无法结构化重放，仅作为审计摘要：\n" + "\n".join(fallback_lines),
+                        }
+                    ],
+                }
+            )
+        return replay_items
 
     async def _instruction_context(
         self,
@@ -198,6 +272,34 @@ def _input_text_values(item: dict[str, Any]) -> list[str]:
                 values.append(part["text"])
         return values
     return []
+
+
+def _call_ids_from_items(items: list[dict[str, Any]]) -> set[str]:
+    call_ids: set[str] = set()
+    for item in items:
+        call_id = item.get("call_id")
+        if isinstance(call_id, str) and call_id:
+            call_ids.add(call_id)
+    return call_ids
+
+
+def _context_item_call_id(item: dict[str, Any]) -> str | None:
+    payload = item.get("payload_json")
+    if not isinstance(payload, dict):
+        return None
+    call_id = payload.get("call_id")
+    return call_id if isinstance(call_id, str) and call_id else None
+
+
+def _is_replayable_context_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    payload_type = value.get("type")
+    if payload_type in {"function_call", "function_call_output", "reasoning"}:
+        return True
+    if payload_type == "message":
+        return value.get("role") in {"assistant", "user", "developer", "system"}
+    return False
 
 
 def _normalize_possible_repo_path(value: str) -> str | None:

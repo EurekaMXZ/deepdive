@@ -13,6 +13,7 @@ class DatabaseSchemaTest(unittest.TestCase):
             "analyses",
             "agent_sessions",
             "agent_turns",
+            "agent_context_items",
             "agent_stream_events",
             "context_assemblies",
             "tool_calls",
@@ -46,6 +47,7 @@ class DatabaseSchemaTest(unittest.TestCase):
             metadata.tables["config_snapshots"].c.config_json,
             metadata.tables["outbox_events"].c.payload_json,
             metadata.tables["agent_stream_events"].c.payload_json,
+            metadata.tables["agent_context_items"].c.payload_json,
             metadata.tables["tool_calls"].c.arguments_json,
             metadata.tables["memory_summaries"].c.summary_json,
             metadata.tables["agent_sessions"].c.effective_limits_json,
@@ -59,6 +61,7 @@ class DatabaseSchemaTest(unittest.TestCase):
         processed = metadata.tables["processed_events"]
         claims = metadata.tables["event_processing_claims"]
         stream = metadata.tables["agent_stream_events"]
+        context_items = metadata.tables["agent_context_items"]
         turns = metadata.tables["agent_turns"]
         tool_calls = metadata.tables["tool_calls"]
         snapshots = metadata.tables["snapshots"]
@@ -83,6 +86,23 @@ class DatabaseSchemaTest(unittest.TestCase):
         self.assertIn("attempt", stream.c)
         self.assertIn("response_id", stream.c)
         self.assertIn("state", stream.c)
+        self.assertIn("seq", context_items.c)
+        self.assertIn("item_type", context_items.c)
+        self.assertIn("payload_json", context_items.c)
+        self.assertIn("idempotency_key", context_items.c)
+        self.assertIn("compacted_at", context_items.c)
+        self.assertIn(
+            ("agent_id", "seq"),
+            {_columns(index) for index in context_items.indexes if index.unique},
+        )
+        self.assertIn(
+            ("agent_id", "idempotency_key"),
+            {_columns(index) for index in context_items.indexes if index.unique},
+        )
+        self.assertIn(
+            ("agent_id", "compacted_at", "seq"),
+            {_columns(index) for index in context_items.indexes},
+        )
         self.assertIn(
             ("agent_id", "trigger_event_id"),
             {_columns(index) for index in turns.indexes if index.unique},

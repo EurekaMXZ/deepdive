@@ -112,6 +112,37 @@ Index("uq_agent_stream_events_analysis_seq", agent_stream_events.c.analysis_id, 
 Index("ix_agent_stream_events_agent_seq", agent_stream_events.c.agent_id, agent_stream_events.c.seq)
 
 
+agent_context_items = Table(
+    "agent_context_items",
+    metadata,
+    uuid_pk(),
+    Column("agent_id", UUID(as_uuid=True), ForeignKey("agent_sessions.id"), nullable=False),
+    Column("turn_id", UUID(as_uuid=True), ForeignKey("agent_turns.id")),
+    Column("seq", BigInteger, nullable=False),
+    Column("item_type", Text, nullable=False),
+    Column("payload_json", JSONB, nullable=False),
+    Column("response_id", Text),
+    Column("source", Text, nullable=False),
+    Column("idempotency_key", Text),
+    Column("compacted_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_agent_context_items_agent_seq", agent_context_items.c.agent_id, agent_context_items.c.seq, unique=True)
+Index(
+    "uq_agent_context_items_agent_idempotency",
+    agent_context_items.c.agent_id,
+    agent_context_items.c.idempotency_key,
+    unique=True,
+    postgresql_where=agent_context_items.c.idempotency_key.isnot(None),
+)
+Index(
+    "ix_agent_context_items_agent_compacted_seq",
+    agent_context_items.c.agent_id,
+    agent_context_items.c.compacted_at,
+    agent_context_items.c.seq,
+)
+
+
 context_assemblies = Table(
     "context_assemblies",
     metadata,

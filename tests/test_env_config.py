@@ -72,6 +72,7 @@ class EnvConfigTest(unittest.TestCase):
                 "OPENAI_SERVICE_TIER": "default",
                 "OPENAI_PARALLEL_TOOL_CALLS": "true",
                 "OPENAI_USE_PREVIOUS_RESPONSE_ID": "true",
+                "OPENAI_TRANSPORT": "websocket_v2",
                 "API_SHOW_MODEL_REASONING_SUMMARY": "false",
             },
             clear=True,
@@ -84,6 +85,7 @@ class EnvConfigTest(unittest.TestCase):
         self.assertEqual(config.openai.service_tier, "default")
         self.assertFalse(config.openai.parallel_tool_calls)
         self.assertTrue(config.openai.use_previous_response_id)
+        self.assertEqual(config.openai.transport, "websocket_v2")
         self.assertFalse(config.openai.show_reasoning_summary)
 
     def test_load_app_config_from_env_uses_full_backend_settings_from_dotenv(self) -> None:
@@ -98,6 +100,7 @@ class EnvConfigTest(unittest.TestCase):
                         "OPENAI_SERVICE_TIER=default",
                         "OPENAI_PARALLEL_TOOL_CALLS=true",
                         "OPENAI_USE_PREVIOUS_RESPONSE_ID=true",
+                        "OPENAI_TRANSPORT=websocket_v2",
                         "API_SHOW_MODEL_REASONING_SUMMARY=false",
                         "PROMPT_SYSTEM_INSTRUCTION_FILE=prompts/custom-system.md",
                         "PROMPT_DEVELOPER_INSTRUCTION_FILE=prompts/custom-developer.md",
@@ -138,6 +141,7 @@ class EnvConfigTest(unittest.TestCase):
         self.assertEqual(config.openai.service_tier, "default")
         self.assertFalse(config.openai.parallel_tool_calls)
         self.assertTrue(config.openai.use_previous_response_id)
+        self.assertEqual(config.openai.transport, "websocket_v2")
         self.assertFalse(config.openai.show_reasoning_summary)
 
         self.assertEqual(config.prompt.system_instruction_file, "prompts/custom-system.md")
@@ -202,12 +206,14 @@ class EnvConfigTest(unittest.TestCase):
                     "service_tier": "priority",
                     "parallel_tool_calls": False,
                     "use_previous_response_id": True,
+                    "transport": "websocket_v2",
                     "show_reasoning_summary": False,
                 }
             }
         )
 
         self.assertEqual(config.openai.reasoning_summary, "detailed")
+        self.assertEqual(config.openai.transport, "websocket_v2")
         self.assertFalse(config.openai.show_reasoning_summary)
 
     def test_web_search_config_loads_without_serializing_tavily_api_key(self) -> None:

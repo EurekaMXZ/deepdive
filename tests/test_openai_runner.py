@@ -8,7 +8,9 @@ from unittest.mock import patch
 from backend.agent.openai_runner import (
     IncompleteResponseStreamError,
     OpenAIResponsesRunner,
+    OpenAIWebSocketResponsesRunner,
     StreamingResponseAccumulator,
+    create_openai_responses_runner,
     parse_response_payload,
     parse_stream_event,
 )
@@ -37,6 +39,186 @@ class OpenAIRunnerTest(unittest.TestCase):
         self.assertEqual(response.response_id, "resp_1")
         headers = dict(captured_requests[0].header_items())
         self.assertEqual(headers["User-agent"], "DeepDive/custom")
+
+    def test_runner_factory_selects_http_or_websocket_transport(self) -> None:
+        http_runner = create_openai_responses_runner(transport="http", api_key="test-key")
+        websocket_runner = create_openai_responses_runner(transport="websocket_v2", api_key="test-key")
+
+        self.assertIsInstance(http_runner, OpenAIResponsesRunner)
+        self.assertNotIsInstance(http_runner, OpenAIWebSocketResponsesRunner)
+        self.assertIsInstance(websocket_runner, OpenAIWebSocketResponsesRunner)
+
+    def test_http_runner_passes_previous_response_id_in_responses_body(self) -> None:
+        captured_bodies = []
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            captured_bodies.append(json.loads(request.data.decode()))
+            return FakeJsonResponse(
+                {
+                    "id": "resp_2",
+                    "output": [],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                }
+            )
+
+        runner = OpenAIResponsesRunner(api_key="test-key")
+
+        with patch("backend.agent.openai_runner.urllib.request.urlopen", fake_urlopen):
+            runner._create_response_sync(
+                {
+                    "model": "gpt-5.5",
+                    "input": [{"role": "user", "content": "continue"}],
+                    "previous_response_id": "resp_1",
+                }
+            )
+
+        self.assertEqual(captured_bodies[0]["previous_response_id"], "resp_1")
+
+    def test_websocket_runner_sends_response_create_event_and_parses_completed_response(self) -> None:
+        websocket = FakeWebSocket(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_2",
+                        "output": [
+                            {
+                                "type": "message",
+                                "content": [{"type": "output_text", "text": "done"}],
+                            }
+                        ],
+                        "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+                    },
+                }
+            ]
+        )
+
+        runner = OpenAIWebSocketResponsesRunner(
+            api_key="test-key",
+            base_url="https://api.example.test/v1",
+            user_agent="DeepDive/custom",
+        )
+
+        with patch("backend.agent.openai_runner._create_websocket_connection", return_value=websocket) as create_connection:
+            response = runner._create_response_sync(
+                {
+                    "model": "gpt-5.5",
+                    "input": [{"role": "user", "content": "hello"}],
+                    "tools": [],
+                    "previous_response_id": "resp_1",
+                    "stream": True,
+                    "background": False,
+                }
+            )
+
+        create_connection.assert_called_once()
+        url, headers, timeout = create_connection.call_args.args
+        self.assertEqual(url, "wss://api.example.test/v1/responses")
+        self.assertIn("Authorization: Bearer test-key", headers)
+        self.assertIn("User-Agent: DeepDive/custom", headers)
+        self.assertEqual(timeout, 300)
+
+        sent = json.loads(websocket.sent[0])
+        self.assertEqual(sent["type"], "response.create")
+        self.assertEqual(sent["model"], "gpt-5.5")
+        self.assertEqual(sent["previous_response_id"], "resp_1")
+        self.assertNotIn("stream", sent)
+        self.assertNotIn("background", sent)
+        self.assertEqual(response.response_id, "resp_2")
+        self.assertEqual(response.output_text, "done")
+
+    def test_websocket_runner_parses_streaming_tool_call_events(self) -> None:
+        websocket = FakeWebSocket(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "fc_1",
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "read_file",
+                        "arguments": "",
+                    },
+                },
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1",
+                    "delta": "{\"path\":\"README.md\"}",
+                },
+                {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": "fc_1",
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "output": [],
+                        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                    },
+                },
+            ]
+        )
+        runner = OpenAIWebSocketResponsesRunner(api_key="test-key")
+
+        with patch("backend.agent.openai_runner._create_websocket_connection", return_value=websocket):
+            response = runner._create_response_sync({"model": "gpt-5.5", "input": []})
+
+        self.assertEqual(response.tool_calls[0].call_id, "call_1")
+        self.assertEqual(response.tool_calls[0].name, "read_file")
+        self.assertEqual(response.tool_calls[0].arguments, {"path": "README.md"})
+
+    def test_websocket_runner_reuses_connection_for_previous_response_id_followup(self) -> None:
+        websocket = FakeWebSocket(
+            [
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "output": [],
+                        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                    },
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_2",
+                        "output": [],
+                        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                    },
+                },
+            ]
+        )
+        runner = OpenAIWebSocketResponsesRunner(api_key="test-key")
+
+        with patch("backend.agent.openai_runner._create_websocket_connection", return_value=websocket) as create_connection:
+            first = runner._create_response_sync({"model": "gpt-5.5", "input": []})
+            second = runner._create_response_sync(
+                {
+                    "model": "gpt-5.5",
+                    "input": [{"type": "function_call_output", "call_id": "call_1", "output": "ok"}],
+                    "previous_response_id": first.response_id,
+                }
+            )
+
+        create_connection.assert_called_once()
+        self.assertEqual(first.response_id, "resp_1")
+        self.assertEqual(second.response_id, "resp_2")
+        sent_payloads = [json.loads(message) for message in websocket.sent]
+        self.assertNotIn("previous_response_id", sent_payloads[0])
+        self.assertEqual(sent_payloads[1]["previous_response_id"], "resp_1")
+        self.assertFalse(websocket.closed)
+
+    def test_websocket_runner_reports_empty_recv_as_incomplete_stream(self) -> None:
+        websocket = FakeRawWebSocket([""])
+        runner = OpenAIWebSocketResponsesRunner(api_key="test-key")
+
+        with (
+            patch("backend.agent.openai_runner._create_websocket_connection", return_value=websocket),
+            self.assertRaisesRegex(IncompleteResponseStreamError, "websocket stream ended before response.completed"),
+        ):
+            runner._create_response_sync({"model": "gpt-5.5", "input": []})
 
     def test_parse_response_payload_extracts_text_tool_call_and_usage(self) -> None:
         output_items = [
@@ -613,6 +795,42 @@ class FakeJsonResponse:
 
     def read(self) -> bytes:
         return json.dumps(self._payload).encode()
+
+
+class FakeWebSocket:
+    def __init__(self, messages: list[dict]) -> None:
+        self._messages = list(messages)
+        self.sent: list[str] = []
+        self.closed = False
+
+    def send(self, value: str) -> None:
+        self.sent.append(value)
+
+    def recv(self) -> str:
+        if not self._messages:
+            raise TimeoutError("no websocket message")
+        return json.dumps(self._messages.pop(0))
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeRawWebSocket:
+    def __init__(self, messages: list[str]) -> None:
+        self._messages = list(messages)
+        self.sent: list[str] = []
+        self.closed = False
+
+    def send(self, value: str) -> None:
+        self.sent.append(value)
+
+    def recv(self) -> str:
+        if not self._messages:
+            raise TimeoutError("no websocket message")
+        return self._messages.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 if __name__ == "__main__":

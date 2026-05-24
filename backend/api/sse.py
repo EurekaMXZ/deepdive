@@ -4,17 +4,6 @@ import json
 from typing import Any
 
 from backend.api.stream_schemas import TERMINAL_ANALYSIS_STATUSES, TERMINAL_STREAM_EVENT_TYPES
-from backend.events.live_stream import LiveModelStreamEvent
-
-
-DEFAULT_VISIBLE_LIVE_MODEL_EVENTS = frozenset(
-    {
-        "response.output_text.delta",
-        "response.output_text.done",
-        "response.completed",
-        "model_reasoning_summary",
-    }
-)
 
 SENSITIVE_DISPLAY_KEYS = frozenset(
     {
@@ -43,24 +32,6 @@ def format_sse_event(event: Any) -> str:
     event_type = event_type_of(event)
     payload = json.dumps(display_event_payload(event_type, event_payload(event)), ensure_ascii=False, separators=(",", ":"))
     return f"id: {event_seq(event)}\nevent: {event_type}\ndata: {payload}\n\n"
-
-
-def format_live_model_sse_event(event: LiveModelStreamEvent) -> str:
-    payload = json.dumps(event.payload, ensure_ascii=False, separators=(",", ":"))
-    return f"event: {event.event_name}\ndata: {payload}\n\n"
-
-
-def should_emit_live_model_event(
-    event: LiveModelStreamEvent,
-    *,
-    debug_raw_llm_events: bool = False,
-    show_model_reasoning_summary: bool = True,
-) -> bool:
-    if event.event_name.startswith("model_reasoning_summary") and not show_model_reasoning_summary:
-        return False
-    if debug_raw_llm_events:
-        return True
-    return event.event_name in DEFAULT_VISIBLE_LIVE_MODEL_EVENTS
 
 
 def event_seq(event: Any) -> int:

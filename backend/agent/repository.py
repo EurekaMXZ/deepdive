@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -9,6 +8,20 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.agent import AgentSessionState
+from backend.agent.context_items import (
+    ASSISTANT_OUTPUT_ITEM_TYPE,
+    FUNCTION_CALL_ITEM_TYPE,
+    FUNCTION_CALL_OUTPUT_ITEM_TYPE,
+    MODEL_CONTEXT_SOURCE,
+    TOOL_CONTEXT_SOURCE,
+    append_context_item_on_connection,
+    assistant_output_idempotency_key,
+    assistant_output_payload,
+    function_call_output_payload,
+    function_call_payload,
+    model_function_call_idempotency_key,
+    tool_output_idempotency_key,
+)
 from backend.agent.repository_context import AgentContextStore
 from backend.agent.repository_stream import AgentStreamStore, add_stream_event_on_connection
 from backend.db.connections import connection_from
@@ -173,6 +186,26 @@ class PostgresAgentRepository:
     async def load_context_items(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
         return await self._context_store.load_context_items(session=session)
 
+    async def load_uncompacted_context_items(self, *, agent_id: UUID, limit: int = 12) -> list[dict[str, Any]]:
+        async with self._connection() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT seq, item_type, payload_json, source, response_id
+                    FROM agent_context_items
+                    WHERE agent_id = :agent_id
+                      AND compacted_at IS NULL
+                    ORDER BY seq
+                    LIMIT :limit
+                    """
+                ),
+                {"agent_id": agent_id, "limit": limit},
+            )
+        return [dict(row) for row in result.mappings().all()]
+
+    async def load_latest_memory_summary(self, *, agent_id: UUID) -> dict[str, Any] | None:
+        return await self._context_store.load_latest_memory_summary(agent_id=agent_id)
+
     async def load_instruction_files(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
         return await self._context_store.load_instruction_files(session=session)
 
@@ -200,6 +233,52 @@ class PostgresAgentRepository:
             attempt=attempt,
             response_id=response_id,
             state=state,
+        )
+
+    async def append_context_item(
+        self,
+        *,
+        agent_id: UUID,
+        turn_id: UUID | None,
+        item_type: str,
+        payload: dict[str, Any],
+        response_id: str | None = None,
+        source: str,
+        idempotency_key: str | None = None,
+    ) -> None:
+        async with self._connection() as connection:
+            await append_context_item_on_connection(
+                connection,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                item_type=item_type,
+                payload=payload,
+                response_id=response_id,
+                source=source,
+                idempotency_key=idempotency_key,
+            )
+
+    async def _append_context_item_on_connection(
+        self,
+        connection,
+        *,
+        agent_id: UUID,
+        turn_id: UUID | None,
+        item_type: str,
+        payload: dict[str, Any],
+        response_id: str | None = None,
+        source: str,
+        idempotency_key: str | None = None,
+    ) -> None:
+        await append_context_item_on_connection(
+            connection,
+            agent_id=agent_id,
+            turn_id=turn_id,
+            item_type=item_type,
+            payload=payload,
+            response_id=response_id,
+            source=source,
+            idempotency_key=idempotency_key,
         )
 
     async def _add_stream_event_on_connection(
@@ -390,6 +469,7 @@ class PostgresAgentRepository:
             can_create = await self._lock_continuable_session(connection, analysis_id=analysis_id, agent_id=agent_id)
             if not can_create:
                 raise RuntimeError("Cannot request tool call for terminal or cancelling analysis")
+            context_tool_call_kwargs = dict(tool_call_kwargs)
             await self._update_latest_response_on_connection(connection, agent_id=latest_response_agent_id, response_id=response_id)
             await self._complete_turn_on_connection(
                 connection,
@@ -401,6 +481,34 @@ class PostgresAgentRepository:
                 usage=usage,
             )
             tool_call_id = await self._create_tool_call_on_connection(connection, **tool_call_kwargs)
+            await self._append_context_item_on_connection(
+                connection,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                item_type=FUNCTION_CALL_ITEM_TYPE,
+                payload=function_call_payload(
+                    call_id=context_tool_call_kwargs["openai_call_id"],
+                    name=context_tool_call_kwargs["tool_name"],
+                    arguments=context_tool_call_kwargs["arguments_json"],
+                ),
+                response_id=response_id,
+                source=MODEL_CONTEXT_SOURCE,
+                idempotency_key=model_function_call_idempotency_key(context_tool_call_kwargs["openai_call_id"]),
+            )
+            if context_tool_call_kwargs.get("status") == "completed" and context_tool_call_kwargs.get("result_summary") is not None:
+                await self._append_context_item_on_connection(
+                    connection,
+                    agent_id=agent_id,
+                    turn_id=turn_id,
+                    item_type=FUNCTION_CALL_OUTPUT_ITEM_TYPE,
+                    payload=function_call_output_payload(
+                        call_id=context_tool_call_kwargs["openai_call_id"],
+                        output=_json_or_none(context_tool_call_kwargs.get("result_summary")) or "{}",
+                    ),
+                    response_id=None,
+                    source=TOOL_CONTEXT_SOURCE,
+                    idempotency_key=tool_output_idempotency_key(context_tool_call_kwargs["openai_call_id"]),
+                )
             payload = dict(stream_payload)
             payload["tool_call_id"] = str(tool_call_id)
             await self._add_stream_event_on_connection(
@@ -474,6 +582,17 @@ class PostgresAgentRepository:
             )
             if int(getattr(result, "rowcount", 0) or 0) <= 0:
                 return False
+            if output_text:
+                await self._append_context_item_on_connection(
+                    connection,
+                    agent_id=agent_id,
+                    turn_id=turn_id,
+                    item_type=ASSISTANT_OUTPUT_ITEM_TYPE,
+                    payload=assistant_output_payload(output_text),
+                    response_id=response_id,
+                    source=MODEL_CONTEXT_SOURCE,
+                    idempotency_key=assistant_output_idempotency_key(response_id),
+                )
             if final_delta_payload is not None:
                 await self._add_stream_event_on_connection(
                     connection,
@@ -496,7 +615,7 @@ class PostgresAgentRepository:
                 state="completed",
             )
             await DbOutboxSink(connection).add(event)
-        del output_text, final_output_payload
+        del final_output_payload
         return True
 
     async def _can_continue(self, connection, *, analysis_id: UUID, agent_id: UUID) -> bool:
@@ -689,6 +808,64 @@ class PostgresAgentRepository:
                 {"id": new_uuid7(), "created_at": datetime.now(UTC), **kwargs},
             )
 
+    async def compact_context_items(
+        self,
+        *,
+        agent_id: UUID,
+        compacted_until_seq: int,
+        compacted_until_turn: int,
+        summary_json: dict[str, Any],
+        evidence_ids_json: list[Any],
+        focus_paths_json: list[str],
+        next_action: str | None,
+    ) -> None:
+        now = datetime.now(UTC)
+        async with self._connection() as connection:
+            await connection.execute(
+                text(
+                    """
+                    UPDATE agent_context_items
+                    SET compacted_at = :compacted_at
+                    WHERE agent_id = :agent_id
+                      AND seq <= :compacted_until_seq
+                      AND compacted_at IS NULL
+                    """
+                ),
+                {
+                    "agent_id": agent_id,
+                    "compacted_until_seq": compacted_until_seq,
+                    "compacted_at": now,
+                },
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO memory_summaries (
+                        id, agent_id, compacted_until_turn, summary_json, evidence_ids_json,
+                        focus_paths_json, next_action, created_at
+                    )
+                    VALUES (
+                        :id, :agent_id, :compacted_until_turn, :summary_json, :evidence_ids_json,
+                        :focus_paths_json, :next_action, :created_at
+                    )
+                    """
+                ).bindparams(
+                    bindparam("summary_json", type_=JSONB),
+                    bindparam("evidence_ids_json", type_=JSONB),
+                    bindparam("focus_paths_json", type_=JSONB),
+                ),
+                {
+                    "id": new_uuid7(),
+                    "agent_id": agent_id,
+                    "compacted_until_turn": compacted_until_turn,
+                    "summary_json": summary_json,
+                    "evidence_ids_json": evidence_ids_json,
+                    "focus_paths_json": focus_paths_json,
+                    "next_action": next_action,
+                    "created_at": now,
+                },
+            )
+
     async def add_outbox(self, event: EventEnvelope) -> None:
         async with self._connection() as connection:
             await DbOutboxSink(connection).add(event)
@@ -698,4 +875,5 @@ def _json_or_none(value: Any) -> str | None:
         return None
     if isinstance(value, str):
         return value
+    import json
     return json.dumps(value, ensure_ascii=False)

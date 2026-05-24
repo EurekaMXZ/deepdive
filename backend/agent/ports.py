@@ -12,20 +12,14 @@ class ResponsesRunner(Protocol):
         ...
 
 
-class AgentRepository(Protocol):
-    async def get_session(self, agent_id: UUID) -> AgentSessionState | None:
-        ...
-
-    async def start_turn(
-        self,
-        *,
-        session: AgentSessionState,
-        trigger_event_id: UUID | None = None,
-        trigger_domain_key: str | None = None,
-    ) -> UUID:
-        ...
-
+class ContextAssemblyRepository(Protocol):
     async def load_context_items(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
+        ...
+
+    async def load_uncompacted_context_items(self, *, agent_id: UUID, limit: int = 12) -> list[dict[str, Any]]:
+        ...
+
+    async def load_latest_memory_summary(self, *, agent_id: UUID) -> dict[str, Any] | None:
         ...
 
     async def load_instruction_files(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
@@ -34,6 +28,32 @@ class AgentRepository(Protocol):
     async def load_config_snapshot(self, *, session: AgentSessionState) -> dict[str, Any] | None:
         ...
 
+    async def save_context_assembly(self, **kwargs) -> None:
+        ...
+
+
+class AgentContextItemRepository(Protocol):
+    async def append_context_item(
+        self,
+        *,
+        agent_id: UUID,
+        turn_id: UUID | None,
+        item_type: str,
+        payload: dict[str, Any],
+        response_id: str | None = None,
+        source: str,
+        idempotency_key: str | None = None,
+    ) -> None:
+        ...
+
+    async def compact_context_items(self, **kwargs) -> None:
+        ...
+
+    async def add_memory_summary(self, **kwargs) -> None:
+        ...
+
+
+class AgentStreamRepository(Protocol):
     async def add_stream_event(
         self,
         *,
@@ -48,10 +68,21 @@ class AgentRepository(Protocol):
     ) -> None:
         ...
 
-    async def update_session_status(self, *, agent_id: UUID, status: str) -> None:
+
+class AgentTurnRepository(Protocol):
+    async def get_session(self, agent_id: UUID) -> AgentSessionState | None:
         ...
 
-    async def save_context_assembly(self, **kwargs) -> None:
+    async def start_turn(
+        self,
+        *,
+        session: AgentSessionState,
+        trigger_event_id: UUID | None = None,
+        trigger_domain_key: str | None = None,
+    ) -> UUID:
+        ...
+
+    async def update_session_status(self, *, agent_id: UUID, status: str) -> None:
         ...
 
     async def complete_turn(self, **kwargs) -> None:
@@ -63,6 +94,8 @@ class AgentRepository(Protocol):
     async def update_latest_response(self, *, agent_id: UUID, response_id: str) -> None:
         ...
 
+
+class AgentToolCallRepository(Protocol):
     async def create_tool_call(self, **kwargs) -> UUID:
         ...
 
@@ -99,14 +132,30 @@ class AgentRepository(Protocol):
     async def get_pending_tool_call_for_turn(self, *, turn_id: UUID) -> dict[str, Any] | None:
         ...
 
+
+class AgentAnalysisRepository(Protocol):
     async def complete_analysis(self, *, analysis_id: UUID, agent_id: UUID, output_text: str) -> bool:
         ...
 
     async def fail_analysis(self, *, analysis_id: UUID, agent_id: UUID, error_code: str, error_message: str) -> bool:
         ...
 
-    async def add_memory_summary(self, **kwargs) -> None:
-        ...
 
+class AgentOutboxRepository(Protocol):
     async def add_outbox(self, event: EventEnvelope) -> None:
         ...
+
+
+class AgentRepository(
+    ContextAssemblyRepository,
+    AgentContextItemRepository,
+    AgentStreamRepository,
+    AgentTurnRepository,
+    AgentToolCallRepository,
+    AgentAnalysisRepository,
+    AgentOutboxRepository,
+    Protocol,
+):
+    """Composite port kept for the command handler while focused ports serve smaller collaborators."""
+
+    ...

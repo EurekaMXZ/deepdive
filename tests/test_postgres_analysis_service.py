@@ -62,7 +62,13 @@ class PostgresAnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         database = FakeDatabase()
         service = PostgresAnalysisService(
             database,
-            config=AppConfig(openai=OpenAIConfig(reasoning_summary="detailed", show_reasoning_summary=False)),
+            config=AppConfig(
+                openai=OpenAIConfig(
+                    reasoning_summary="detailed",
+                    show_reasoning_summary=False,
+                    transport="websocket_v2",
+                )
+            ),
         )
 
         await service.create(
@@ -74,6 +80,7 @@ class PostgresAnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         agent_session_params = database.connection.executed[2][1]
         self.assertEqual(agent_session_params["effective_runtime_json"]["reasoning_summary"], "detailed")
         self.assertFalse(agent_session_params["effective_runtime_json"]["show_reasoning_summary"])
+        self.assertEqual(agent_session_params["effective_runtime_json"]["transport"], "websocket_v2")
 
     async def test_cancel_updates_analysis_and_session_then_writes_outbox_event(self) -> None:
         analysis_id = new_uuid7()

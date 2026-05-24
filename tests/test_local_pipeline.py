@@ -22,14 +22,14 @@ class LocalPipelineTest(unittest.IsolatedAsyncioTestCase):
             async def __call__(self, event: EventEnvelope) -> None:
                 handled_events.append(event)
 
-        class FakeResponsesRunner:
-            def __init__(self, **kwargs) -> None:
-                captured_runner_kwargs.append(kwargs)
+        def fake_runner_factory(**kwargs):
+            captured_runner_kwargs.append(kwargs)
+            return object()
 
         with (
             patch("backend.workers.local_pipeline.PostgresAgentRepository"),
             patch("backend.workers.local_pipeline.ContextAssembler"),
-            patch("backend.workers.local_pipeline.OpenAIResponsesRunner", FakeResponsesRunner),
+            patch("backend.workers.local_pipeline.create_openai_responses_runner", side_effect=fake_runner_factory),
             patch("backend.workers.local_pipeline.load_app_config_from_env"),
             patch("backend.workers.local_pipeline.AgentCommandHandler", FakeAgentHandler),
         ):
@@ -62,6 +62,56 @@ class LocalPipelineTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([event.event_type for event in handled_events], [EventType.TOOL_CALL_FAILED])
         self.assertEqual(captured_runner_kwargs[0]["user_agent"], "DeepDive/custom")
+        self.assertEqual(captured_runner_kwargs[0]["transport"], "http")
+
+    async def test_agent_events_pass_configured_openai_transport_to_runner_factory(self) -> None:
+        captured_runner_kwargs = []
+
+        class FakeAgentHandler:
+            def __init__(self, **kwargs) -> None:
+                del kwargs
+
+            async def __call__(self, event: EventEnvelope) -> None:
+                del event
+
+        def fake_runner_factory(**kwargs):
+            captured_runner_kwargs.append(kwargs)
+            return object()
+
+        with (
+            patch("backend.workers.local_pipeline.PostgresAgentRepository"),
+            patch("backend.workers.local_pipeline.ContextAssembler"),
+            patch("backend.workers.local_pipeline.create_openai_responses_runner", side_effect=fake_runner_factory),
+            patch("backend.workers.local_pipeline.load_app_config_from_env", return_value=AppConfig.default()),
+            patch("backend.workers.local_pipeline.AgentCommandHandler", FakeAgentHandler),
+        ):
+            await _dispatch_agent_event(
+                EventEnvelope.new(
+                    event_type=EventType.TOOL_CALL_COMPLETED,
+                    analysis_id=new_uuid7(),
+                    agent_id=new_uuid7(),
+                    snapshot_id=new_uuid7(),
+                ),
+                database=FakeDatabase(),
+                storage=object(),
+                settings=LocalPipelineSettings(
+                    database_url="postgresql+psycopg://deepdive:deepdive@localhost:5432/deepdive",
+                    openai_api_key="test-key",
+                    openai_base_url="https://api.example.test/v1",
+                    openai_user_agent="DeepDive/custom",
+                    openai_transport="websocket_v2",
+                    minio_endpoint="localhost:9000",
+                    minio_access_key="deepdive",
+                    minio_secret_key="deepdive-secret",
+                    minio_bucket="deepdive-objects-custom",
+                    minio_secure=False,
+                    cache_root_dir="D:/cache/deepdive",
+                    max_events=1,
+                ),
+            )
+
+        self.assertEqual(captured_runner_kwargs[0]["base_url"], "https://api.example.test/v1")
+        self.assertEqual(captured_runner_kwargs[0]["transport"], "websocket_v2")
 
     async def test_execution_events_use_local_pipeline_app_config(self) -> None:
         captured_executor_kwargs = []

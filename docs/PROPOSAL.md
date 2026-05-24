@@ -367,7 +367,7 @@ SSE 规则：
 SSE id 使用 agent_stream_events.seq
 Last-Event-ID 表示客户端已收到的最大 seq
 API 先从 Postgres replay seq > Last-Event-ID 的事件
-随后订阅 Kafka live stream
+随后继续轮询 Postgres 中新增的 agent_stream_events
 SSE 断线不影响 worker 执行
 ```
 
@@ -388,10 +388,9 @@ done
 `model_reasoning_summary` 事件来自 Responses completed payload 中的最终
 reasoning summary，作为可恢复 stream event 写入 `agent_stream_events`。
 客户端断线后通过 `Last-Event-ID` replay 时，应能恢复已持久化的最终模型思考
-摘要。Responses API 的最终输出文本仍通过 live `response.output_text.delta`
-流式输出给 `/events` 客户端，但不写入 `agent_stream_events`；raw OpenAI
-token、tool argument delta、reasoning summary delta/done 只作为受控
-debug 事件暴露，不作为默认 `/events` 输出，也不作为默认持久化 replay 内容。
+摘要。Responses API 的最终输出文本在模型请求完成后写入一条可恢复的
+`delta` 事件；raw OpenAI token、tool argument delta、reasoning summary
+delta/done 不作为默认 `/events` 输出，也不作为默认持久化 replay 内容。
 
 示例：
 
@@ -483,7 +482,6 @@ deepdive.snapshot.commands
 deepdive.agent.commands
 deepdive.execution.commands
 deepdive.domain.events
-deepdive.agent.stream
 deepdive.dlq
 ```
 
@@ -1291,10 +1289,10 @@ AnalysisCancelled
 ```
 
 模型 Responses API 的 token 级实时预览流不作为 durable domain event 发布，
-也不写入 `agent_stream_events`。Agent worker 直接向 `deepdive.agent.stream`
-发布轻量 `LiveModelStreamEvent`；API 只读该 topic 并转发给当前在线的
-`GET /analysis/{analysis_id}/events` SSE 连接。`response.completed` 的 live
-事件只携带轻量完成信号和 `response_id`，完整模型输出在请求完成后通过
+也不直接推送给 `/events` 客户端。Agent worker 将最终 reasoning summary、
+工具事件、最终输出 `delta` 和 `done` 写入 `agent_stream_events`；API 只从
+Postgres replay/轮询这些可恢复事件并转发给当前在线的
+`GET /analysis/{analysis_id}/events` SSE 连接。完整模型输出在请求完成后仍通过
 `agent_turns.output_ref` 指向的对象存储结果恢复。
 
 Agent worker 必须可恢复。崩溃后新 worker 应读取：

@@ -4,12 +4,13 @@ import json
 from typing import Any
 from uuid import UUID
 
+from backend.agent.compaction import ContextCompactor
 from backend.agent.context import ContextAssembler
 from backend.agent.models import AgentSessionState, ModelResponse, ModelToolCall
 from backend.agent.ports import AgentRepository, ResponsesRunner
 from backend.config import AppConfig
 from backend.events import EventEnvelope, EventType
-from backend.events.live_stream import completed_live_payload, model_reasoning_summary_live_payloads
+from backend.events.model_stream_payloads import model_reasoning_summary_stream_payloads
 from backend.execution.permissions import DEFAULT_TOOL_POLICY_HASH
 from backend.execution.tool_registry import DEFAULT_TOOL_REGISTRY_VERSION
 
@@ -27,14 +28,13 @@ class AgentCommandHandler:
         responses_runner: ResponsesRunner,
         config: AppConfig,
         model_retry_attempts: int = 3,
-        live_stream_publisher=None,
     ) -> None:
         self._repository = repository
         self._context_assembler = context_assembler
         self._responses_runner = responses_runner
         self._config = config
         self._model_retry_attempts = max(1, int(model_retry_attempts))
-        self._live_stream_publisher = live_stream_publisher
+        self._compactor = ContextCompactor(repository=repository)
 
     async def __call__(self, event: EventEnvelope) -> None:
         if event.event_type in {
@@ -125,16 +125,25 @@ class AgentCommandHandler:
             session.effective_runtime_json.get("use_previous_response_id", self._config.openai.use_previous_response_id)
         ) and bool(session.latest_response_id)
         extra_items = await self._tool_output_items(event, use_previous_response_id=use_previous_response_id)
-        context = await self._context_assembler.assemble(session=session, turn_id=turn_id, extra_items=extra_items)
+        context = await self._context_assembler.assemble(
+            session=session,
+            turn_id=turn_id,
+            extra_items=extra_items,
+            include_local_history=not use_previous_response_id,
+        )
         compacted = await self._compact_if_needed(event=event, session=session, context=context)
         if compacted:
             use_previous_response_id = False
             extra_items = await self._tool_output_items(event, use_previous_response_id=False)
-            context = await self._context_assembler.assemble(session=session, turn_id=turn_id, extra_items=extra_items)
+            context = await self._context_assembler.assemble(
+                session=session,
+                turn_id=turn_id,
+                extra_items=extra_items,
+                include_local_history=True,
+            )
             if self._context_exceeds_threshold(session=session, context=context):
                 await self._fail_context_too_large_after_compact(event=event, session=session, turn_id=turn_id, context=context)
                 return
-        live_stream_seq = 0
         show_reasoning_summary = bool(
             session.effective_runtime_json.get(
                 "show_reasoning_summary",
@@ -145,15 +154,14 @@ class AgentCommandHandler:
         reasoning_summary_final_emitted = False
 
         async def on_raw_sse_event(event_name: str, payload: dict[str, Any]) -> None:
-            nonlocal live_stream_seq, reasoning_summary_final_emitted
-            live_payload = completed_live_payload(payload) if event_name == "response.completed" else dict(payload)
-            response_id = live_payload.get("response_id") or payload.get("response_id")
+            nonlocal reasoning_summary_final_emitted
+            response_id = payload.get("response_id")
             if event_name == "model_reasoning_summary.delta":
-                text = live_payload.get("text")
+                text = payload.get("text")
                 if isinstance(text, str) and text:
                     reasoning_summary_fragments.append(text)
             if event_name == "model_reasoning_summary.done" and show_reasoning_summary and not reasoning_summary_final_emitted:
-                text = live_payload.get("text")
+                text = payload.get("text")
                 final_text = text if isinstance(text, str) and text else "".join(reasoning_summary_fragments)
                 if final_text:
                     summary_payload: dict[str, Any] = {
@@ -161,8 +169,8 @@ class AgentCommandHandler:
                         "text": final_text,
                     }
                     for key in ("item_id", "response_id", "summary_index"):
-                        if live_payload.get(key) is not None:
-                            summary_payload[key] = live_payload[key]
+                        if payload.get(key) is not None:
+                            summary_payload[key] = payload[key]
                     summary_response_id = summary_payload.get("response_id") or response_id
                     await self._persist_model_reasoning_summary(
                         event_name="model_reasoning_summary",
@@ -173,23 +181,8 @@ class AgentCommandHandler:
                         response_id=summary_response_id,
                     )
                     reasoning_summary_final_emitted = True
-                    if self._live_stream_publisher is not None:
-                        live_stream_seq += 1
-                        try:
-                            await self._live_stream_publisher.publish_event(
-                                analysis_id=session.analysis_id,
-                                agent_id=session.agent_id,
-                                turn_id=turn_id,
-                                attempt=event.attempt,
-                                stream_seq=live_stream_seq,
-                                event_name="model_reasoning_summary",
-                                payload=summary_payload,
-                                response_id=summary_response_id,
-                            )
-                        except Exception:
-                            return
             if event_name == "response.completed" and show_reasoning_summary and not reasoning_summary_final_emitted:
-                for summary_payload in model_reasoning_summary_live_payloads(payload):
+                for summary_payload in model_reasoning_summary_stream_payloads(payload):
                     await self._persist_model_reasoning_summary(
                         event_name="model_reasoning_summary",
                         payload=summary_payload,
@@ -198,40 +191,7 @@ class AgentCommandHandler:
                         attempt=event.attempt,
                         response_id=summary_payload.get("response_id") or response_id,
                     )
-                    if self._live_stream_publisher is not None:
-                        live_stream_seq += 1
-                        try:
-                            await self._live_stream_publisher.publish_event(
-                                analysis_id=session.analysis_id,
-                                agent_id=session.agent_id,
-                                turn_id=turn_id,
-                                attempt=event.attempt,
-                                stream_seq=live_stream_seq,
-                                event_name="model_reasoning_summary",
-                                payload=summary_payload,
-                                response_id=summary_payload.get("response_id") or response_id,
-                            )
-                        except Exception:
-                            return
                     reasoning_summary_final_emitted = True
-            if event_name.startswith("model_reasoning_summary") and not show_reasoning_summary:
-                return
-            if self._live_stream_publisher is None:
-                return
-            live_stream_seq += 1
-            try:
-                await self._live_stream_publisher.publish_event(
-                    analysis_id=session.analysis_id,
-                    agent_id=session.agent_id,
-                    turn_id=turn_id,
-                    attempt=event.attempt,
-                    stream_seq=live_stream_seq,
-                    event_name=event_name,
-                    payload=live_payload,
-                    response_id=response_id,
-                )
-            except Exception:
-                return
 
         reasoning = {
             "effort": session.effective_runtime_json.get(
@@ -350,6 +310,7 @@ class AgentCommandHandler:
                 output_text=response.output_text,
                 stream_payload={"status": "completed", "response_id": response.response_id, "output_ref": output_ref},
                 event=completed_event,
+                final_delta_payload={"text": response.output_text} if response.output_text else None,
             )
             if not completed:
                 return
@@ -372,6 +333,16 @@ class AgentCommandHandler:
         )
         if not completed:
             return
+        if response.output_text:
+            await self._repository.add_stream_event(
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                event_type="delta",
+                payload={"text": response.output_text},
+                turn_id=turn_id,
+                response_id=response.response_id,
+                state="streaming",
+            )
         await self._repository.add_stream_event(
             analysis_id=session.analysis_id,
             agent_id=session.agent_id,
@@ -408,23 +379,28 @@ class AgentCommandHandler:
         token_estimate = int(context.get("token_estimate") or 0)
         if threshold <= 0 or token_estimate <= threshold:
             return False
-        summary = {
-            "goal": "分析仓库源码结构。",
-            "completed_steps": ["已组装当前轮上下文。"],
-            "confirmed_facts": [],
-            "active_hypotheses": [],
-            "open_questions": [],
-            "focus_paths": [],
-            "next_action": "继续基于工具结果分析仓库。",
-        }
-        await self._repository.add_memory_summary(
-            agent_id=session.agent_id,
-            compacted_until_turn=session.turn_count,
-            summary_json=summary,
-            evidence_ids_json=[],
-            focus_paths_json=[],
-            next_action=summary["next_action"],
-        )
+        context_items = await self._repository.load_uncompacted_context_items(agent_id=session.agent_id, limit=200)
+        summary = await self._compactor.build_summary(session=session, context_items=context_items)
+        focus_paths = list(summary.get("focus_paths") or [])
+        if context_items:
+            await self._repository.compact_context_items(
+                agent_id=session.agent_id,
+                compacted_until_seq=max(int(item.get("seq") or 0) for item in context_items),
+                compacted_until_turn=session.turn_count,
+                summary_json=summary,
+                evidence_ids_json=[],
+                focus_paths_json=focus_paths,
+                next_action=summary["next_action"],
+            )
+        else:
+            await self._repository.add_memory_summary(
+                agent_id=session.agent_id,
+                compacted_until_turn=session.turn_count,
+                summary_json=summary,
+                evidence_ids_json=[],
+                focus_paths_json=focus_paths,
+                next_action=summary["next_action"],
+            )
         await self._repository.add_stream_event(
             analysis_id=session.analysis_id,
             agent_id=session.agent_id,

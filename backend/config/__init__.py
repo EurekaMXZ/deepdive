@@ -25,6 +25,7 @@ class OpenAIConfig:
     service_tier: str = "fast"
     parallel_tool_calls: bool = False
     use_previous_response_id: bool = False
+    transport: str = "http"
     show_reasoning_summary: bool = True
 
 
@@ -212,6 +213,7 @@ def load_app_config_from_env() -> AppConfig:
             service_tier=os.environ.get("OPENAI_SERVICE_TIER", default.openai.service_tier),
             parallel_tool_calls=False,
             use_previous_response_id=_bool_env(os.environ.get("OPENAI_USE_PREVIOUS_RESPONSE_ID", str(default.openai.use_previous_response_id))),
+            transport=os.environ.get("OPENAI_TRANSPORT", default.openai.transport),
             show_reasoning_summary=_bool_env(
                 os.environ.get("API_SHOW_MODEL_REASONING_SUMMARY", str(default.openai.show_reasoning_summary))
             ),
@@ -400,6 +402,7 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
             service_tier=str(openai_json.get("service_tier") or default.openai.service_tier),
             parallel_tool_calls=False,
             use_previous_response_id=_bool_value(openai_json.get("use_previous_response_id"), default.openai.use_previous_response_id),
+            transport=str(openai_json.get("transport") or default.openai.transport),
             show_reasoning_summary=_bool_value(
                 openai_json.get("show_reasoning_summary"),
                 default.openai.show_reasoning_summary,

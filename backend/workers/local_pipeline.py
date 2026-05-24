@@ -6,7 +6,7 @@ import os
 from sqlalchemy import text
 
 from backend.agent import AgentCommandHandler, ContextAssembler
-from backend.agent.openai_runner import OpenAIResponsesRunner
+from backend.agent.openai_runner import create_openai_responses_runner
 from backend.agent.repository import PostgresAgentRepository
 from backend.config import load_app_config_from_env, load_dotenv_if_exists
 from backend.db.runtime import create_database
@@ -37,6 +37,7 @@ class LocalPipelineSettings:
     cache_root_dir: str
     max_events: int = 100
     openai_user_agent: str = "DeepDive/1.0"
+    openai_transport: str = "http"
 
 
 def load_local_pipeline_settings() -> LocalPipelineSettings:
@@ -46,6 +47,7 @@ def load_local_pipeline_settings() -> LocalPipelineSettings:
         openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
         openai_base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         openai_user_agent=os.environ.get("OPENAI_USER_AGENT", "DeepDive/1.0"),
+        openai_transport=os.environ.get("OPENAI_TRANSPORT", "http"),
         minio_endpoint=os.environ.get("MINIO_ENDPOINT", "localhost:9000"),
         minio_access_key=os.environ.get("MINIO_ACCESS_KEY", os.environ.get("MINIO_ROOT_USER", "deepdive")),
         minio_secret_key=os.environ.get("MINIO_SECRET_KEY", os.environ.get("MINIO_ROOT_PASSWORD", "deepdive-secret")),
@@ -163,13 +165,18 @@ async def _dispatch_agent_event(event: EventEnvelope, *, database, storage: Mini
     await AgentCommandHandler(
         repository=repository,
         context_assembler=ContextAssembler(repository=repository, storage=storage),
-        responses_runner=OpenAIResponsesRunner(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-            user_agent=settings.openai_user_agent,
-        ),
+        responses_runner=_openai_runner(settings),
         config=load_app_config_from_env(),
     )(event)
+
+
+def _openai_runner(settings: LocalPipelineSettings):
+    return create_openai_responses_runner(
+        transport=settings.openai_transport,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+        user_agent=settings.openai_user_agent,
+    )
 
 
 class _SingleConnectionDatabase:
