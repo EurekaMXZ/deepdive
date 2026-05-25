@@ -23,6 +23,7 @@ class DatabaseSchemaTest(unittest.TestCase):
             "agent_sessions",
             "agent_turns",
             "agent_context_items",
+            "agent_todo_lists",
             "agent_stream_events",
             "context_assemblies",
             "tool_calls",
@@ -57,6 +58,7 @@ class DatabaseSchemaTest(unittest.TestCase):
             metadata.tables["outbox_events"].c.payload_json,
             metadata.tables["agent_stream_events"].c.payload_json,
             metadata.tables["agent_context_items"].c.payload_json,
+            metadata.tables["agent_todo_lists"].c.items_json,
             metadata.tables["tool_calls"].c.arguments_json,
             metadata.tables["memory_summaries"].c.summary_json,
             metadata.tables["agent_sessions"].c.effective_limits_json,
@@ -71,6 +73,7 @@ class DatabaseSchemaTest(unittest.TestCase):
         claims = metadata.tables["event_processing_claims"]
         stream = metadata.tables["agent_stream_events"]
         context_items = metadata.tables["agent_context_items"]
+        todo_lists = metadata.tables["agent_todo_lists"]
         turns = metadata.tables["agent_turns"]
         tool_calls = metadata.tables["tool_calls"]
         snapshots = metadata.tables["snapshots"]
@@ -157,6 +160,18 @@ class DatabaseSchemaTest(unittest.TestCase):
             {_columns(index) for index in context_items.indexes},
         )
         self.assertIn(
+            ("agent_id", "version"),
+            {_columns(index) for index in todo_lists.indexes if index.unique},
+        )
+        self.assertIn(
+            ("tool_call_id",),
+            {_columns(index) for index in todo_lists.indexes if index.unique},
+        )
+        self.assertIn(
+            ("analysis_id", "version"),
+            {_columns(index) for index in todo_lists.indexes},
+        )
+        self.assertIn(
             ("agent_id", "trigger_event_id"),
             {_columns(index) for index in turns.indexes if index.unique},
         )
@@ -192,6 +207,22 @@ class DatabaseSchemaTest(unittest.TestCase):
             ("tool_call_id",),
             {_columns(index) for index in document_revisions.indexes if index.unique},
         )
+
+    def test_agent_todo_lists_have_expected_columns(self) -> None:
+        todo_lists = metadata.tables["agent_todo_lists"]
+
+        for column_name in [
+            "analysis_id",
+            "agent_id",
+            "turn_id",
+            "tool_call_id",
+            "version",
+            "items_json",
+            "note",
+            "created_at",
+        ]:
+            with self.subTest(table="agent_todo_lists", column=column_name):
+                self.assertIn(column_name, todo_lists.c)
 
     def test_document_tables_have_expected_columns(self) -> None:
         documents = metadata.tables["documents"]

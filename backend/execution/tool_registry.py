@@ -55,6 +55,15 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         idempotent=False,
         parallel_safe=False,
     ),
+    "todo_update": ToolDefinition(
+        "todo_update",
+        "Update the current Codex-style analysis TODO plan snapshot.",
+        ToolCapability.ARTIFACT_WRITE,
+        read_only=False,
+        idempotent=False,
+        requires_analysis_id=True,
+        parallel_safe=False,
+    ),
     "document_create": ToolDefinition(
         "document_create",
         "Create a markdown analysis document artifact.",
@@ -201,6 +210,34 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "content": {"type": "string"},
         },
         "required": ["title", "kind", "content"],
+        "additionalProperties": False,
+    },
+    "todo_update": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "description": "Stable lowercase slug for the TODO item.",
+                        },
+                        "title": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                    },
+                    "required": ["id", "title", "status"],
+                    "additionalProperties": False,
+                },
+            },
+            "note": {"type": ["string", "null"], "maxLength": 500},
+        },
+        "required": ["items", "note"],
         "additionalProperties": False,
     },
     "document_get": {

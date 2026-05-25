@@ -97,6 +97,113 @@ class ApiSseReplayTest(unittest.TestCase):
         self.assertIn("event: model_reasoning_summary", response.text)
         self.assertIn("我会先查看仓库结构", response.text)
 
+    def test_events_endpoint_replays_persisted_reasoning_summary_delta(self) -> None:
+        app = create_app()
+        client = TestClient(app)
+        headers = _auth_headers(client)
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        now = datetime.now(UTC)
+        service = FakeAnalysisService(
+            AnalysisRecord(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=None,
+                status="running",
+                repository_url="https://github.com/example/project",
+                requested_ref="main",
+                resolved_commit_sha=None,
+                created_at=now,
+                updated_at=now,
+            ),
+            events=[
+                {"seq": 1, "event_type": "status", "payload_json": {"status": "calling_model"}},
+                {
+                    "seq": 2,
+                    "event_type": "model_reasoning_summary.delta",
+                    "payload_json": {
+                        "type": "model_reasoning_summary.delta",
+                        "text": "我会先查看",
+                        "item_id": "rs_1",
+                        "response_id": "resp_1",
+                    },
+                },
+                {
+                    "seq": 3,
+                    "event_type": "model_reasoning_summary",
+                    "payload_json": {
+                        "type": "model_reasoning_summary",
+                        "text": "我会先查看仓库结构。",
+                        "item_id": "rs_1",
+                        "response_id": "resp_1",
+                    },
+                },
+                {"seq": 4, "event_type": "done", "payload_json": {"status": "completed"}},
+            ],
+        )
+        app.state.analysis_service = service
+
+        response = client.get(
+            f"/analysis/{analysis_id}/events",
+            headers={**headers, "Last-Event-ID": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("id: 1", response.text)
+        self.assertIn("id: 2", response.text)
+        self.assertIn("event: model_reasoning_summary.delta", response.text)
+        self.assertIn("我会先查看", response.text)
+        self.assertIn("event: model_reasoning_summary", response.text)
+
+    def test_events_endpoint_replays_persisted_todo_update(self) -> None:
+        app = create_app()
+        client = TestClient(app)
+        headers = _auth_headers(client)
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        now = datetime.now(UTC)
+        service = FakeAnalysisService(
+            AnalysisRecord(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=None,
+                status="running",
+                repository_url="https://github.com/example/project",
+                requested_ref="main",
+                resolved_commit_sha=None,
+                created_at=now,
+                updated_at=now,
+            ),
+            events=[
+                {"seq": 1, "event_type": "status", "payload_json": {"status": "calling_model"}},
+                {
+                    "seq": 2,
+                    "event_type": "todo_update",
+                    "payload_json": {
+                        "version": 1,
+                        "items": [
+                            {"id": "inspect-repo", "title": "Inspect repository", "status": "completed"},
+                            {"id": "write-summary", "title": "Write summary", "status": "in_progress"},
+                        ],
+                        "note": "Repository shape is known.",
+                    },
+                },
+                {"seq": 3, "event_type": "done", "payload_json": {"status": "completed"}},
+            ],
+        )
+        app.state.analysis_service = service
+
+        response = client.get(
+            f"/analysis/{analysis_id}/events",
+            headers={**headers, "Last-Event-ID": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("id: 1", response.text)
+        self.assertIn("id: 2", response.text)
+        self.assertIn("event: todo_update", response.text)
+        self.assertIn("write-summary", response.text)
+
     def test_events_endpoint_continues_polling_until_terminal_status(self) -> None:
         app = create_app()
         client = TestClient(app)

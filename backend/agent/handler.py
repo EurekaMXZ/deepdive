@@ -213,6 +213,23 @@ class AgentCommandHandler:
                 text = payload.get("text")
                 if isinstance(text, str) and text:
                     reasoning_summary_fragments.append(text)
+                    if show_reasoning_summary:
+                        delta_payload: dict[str, Any] = {
+                            "type": "model_reasoning_summary.delta",
+                            "text": text,
+                        }
+                        for key in ("item_id", "response_id", "summary_index"):
+                            if payload.get(key) is not None:
+                                delta_payload[key] = payload[key]
+                        delta_response_id = delta_payload.get("response_id") or response_id
+                        await self._persist_model_reasoning_summary(
+                            event_name="model_reasoning_summary.delta",
+                            payload=delta_payload,
+                            session=session,
+                            turn_id=turn_id,
+                            attempt=event.attempt,
+                            response_id=delta_response_id,
+                        )
             if (
                 event_name == "model_reasoning_summary.done"
                 and show_reasoning_summary
@@ -224,6 +241,26 @@ class AgentCommandHandler:
                     summary_payload: dict[str, Any] = {
                         "type": "model_reasoning_summary",
                         "text": final_text,
+                    }
+                    for key in ("item_id", "response_id", "summary_index"):
+                        if payload.get(key) is not None:
+                            summary_payload[key] = payload[key]
+                    summary_response_id = summary_payload.get("response_id") or response_id
+                    await self._persist_model_reasoning_summary(
+                        event_name="model_reasoning_summary",
+                        payload=summary_payload,
+                        session=session,
+                        turn_id=turn_id,
+                        attempt=event.attempt,
+                        response_id=summary_response_id,
+                    )
+                    reasoning_summary_final_emitted = True
+            if event_name == "model_reasoning_summary" and show_reasoning_summary and not reasoning_summary_final_emitted:
+                text = payload.get("text")
+                if isinstance(text, str) and text:
+                    summary_payload: dict[str, Any] = {
+                        "type": "model_reasoning_summary",
+                        "text": text,
                     }
                     for key in ("item_id", "response_id", "summary_index"):
                         if payload.get(key) is not None:

@@ -61,6 +61,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
             ToolsConfig(
                 enabled=(
                     "web_search",
+                    "todo_update",
                     "document_create",
                     "document_get",
                     "document_update",
@@ -75,6 +76,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
             set(tools),
             {
                 "web_search",
+                "todo_update",
                 "document_create",
                 "document_get",
                 "document_update",
@@ -87,6 +89,11 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
             tools["web_search"]["parameters"]["properties"]["topic"]["enum"], ["general", "news", "finance"]
         )
         self.assertEqual(tools["web_search"]["parameters"]["properties"]["max_results"]["maximum"], 10)
+        self.assertEqual(tools["todo_update"]["parameters"]["properties"]["items"]["maxItems"], 8)
+        self.assertEqual(
+            tools["todo_update"]["parameters"]["properties"]["items"]["items"]["properties"]["status"]["enum"],
+            ["pending", "in_progress", "completed"],
+        )
         self.assertIn("expected_version", tools["document_update"]["parameters"]["required"])
         self.assertTrue(tools["document_create"]["description"].startswith("Create"))
 
@@ -96,7 +103,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
 
     def test_tool_registry_definitions_include_policy_metadata(self) -> None:
         registry = ToolRegistry.from_config(
-            ToolsConfig(enabled=("list_files", "web_search", "document_create", "document_get"))
+            ToolsConfig(enabled=("list_files", "web_search", "todo_update", "document_create", "document_get"))
         )
         definitions = {tool.name: tool for tool in registry.tools}
 
@@ -108,6 +115,11 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(definitions["web_search"].read_only)
         self.assertFalse(definitions["web_search"].idempotent)
         self.assertFalse(definitions["web_search"].parallel_safe)
+        self.assertEqual(definitions["todo_update"].capability, ToolCapability.ARTIFACT_WRITE)
+        self.assertFalse(definitions["todo_update"].read_only)
+        self.assertFalse(definitions["todo_update"].idempotent)
+        self.assertFalse(definitions["todo_update"].parallel_safe)
+        self.assertTrue(definitions["todo_update"].requires_analysis_id)
         self.assertEqual(definitions["document_create"].capability, ToolCapability.ARTIFACT_WRITE)
         self.assertFalse(definitions["document_create"].read_only)
         self.assertFalse(definitions["document_create"].idempotent)
@@ -120,6 +132,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
     def test_parallel_safety_lookup_defaults_unknown_tools_to_exclusive(self) -> None:
         self.assertTrue(is_parallel_safe_tool("read_file"))
         self.assertTrue(is_parallel_safe_tool("search_text"))
+        self.assertFalse(is_parallel_safe_tool("todo_update"))
         self.assertFalse(is_parallel_safe_tool("document_update"))
         self.assertFalse(is_parallel_safe_tool("missing_tool"))
 
@@ -151,6 +164,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
                     "search_text",
                     "read_file",
                     "web_search",
+                    "todo_update",
                     "document_create",
                     "document_get",
                     "document_update",
@@ -163,6 +177,74 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(executor.tool_handlers), {tool.name for tool in registry.tools})
         self.assertIs(executor.tool_handlers["document_create"], executor.tool_handlers["document_update"])
         self.assertIs(executor.tool_handlers["document_delete"], executor.tool_handlers["document_finalize"])
+
+    async def test_todo_update_tool_persists_plan_snapshot(self) -> None:
+        todo_service = FakeTodoService()
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+            todo_service=todo_service,
+        )
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        tool_call_id = new_uuid7()
+
+        result = await executor.execute(
+            ToolExecutionContext(
+                tool_call_id=tool_call_id,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=new_uuid7(),
+            ),
+            "todo_update",
+            {
+                "items": [
+                    {"id": "inspect-repo", "title": "Inspect repository", "status": "completed"},
+                    {"id": "write-summary", "title": "Write summary", "status": "in_progress"},
+                ],
+                "note": "Repository shape is known.",
+            },
+            config=AppConfig(tools=ToolsConfig(enabled=("todo_update",))),
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["tool_name"], "todo_update")
+        self.assertEqual(result["result"]["version"], 1)
+        self.assertEqual(result["result"]["items"][1]["status"], "in_progress")
+        self.assertEqual(todo_service.updates[0]["analysis_id"], analysis_id)
+        self.assertEqual(todo_service.updates[0]["agent_id"], agent_id)
+        self.assertEqual(todo_service.updates[0]["tool_call_id"], tool_call_id)
+
+    async def test_todo_update_tool_rejects_invalid_status_shape(self) -> None:
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(files=[]),
+            storage=InMemoryObjectStorage(),
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+        )
+
+        result = await executor.execute(
+            ToolExecutionContext(
+                tool_call_id=new_uuid7(),
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+            ),
+            "todo_update",
+            {
+                "items": [
+                    {"id": "inspect-repo", "title": "Inspect repository", "status": "completed"},
+                    {"id": "write-summary", "title": "Write summary", "status": "pending"},
+                ],
+                "note": None,
+            },
+            config=AppConfig(tools=ToolsConfig(enabled=("todo_update",))),
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "INVALID_TODO_STATE")
 
     async def test_web_search_returns_not_configured_without_api_key(self) -> None:
         with patch.dict(os.environ, {"TAVILY_API_KEY": ""}):
@@ -2625,6 +2707,23 @@ class FakeToolRepository(SnapshotToolRepository):
             }
         )
         return evidence_id
+
+
+class FakeTodoService:
+    def __init__(self) -> None:
+        self.updates: list[dict] = []
+
+    async def update(self, *, analysis_id, agent_id, tool_call_id, items, note, turn_id=None):
+        payload = {
+            "analysis_id": analysis_id,
+            "agent_id": agent_id,
+            "tool_call_id": tool_call_id,
+            "turn_id": turn_id,
+            "items": items,
+            "note": note,
+        }
+        self.updates.append(payload)
+        return {"version": len(self.updates), "items": items, "note": note}
 
 
 class FakeConnection:

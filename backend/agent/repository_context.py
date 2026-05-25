@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import text
@@ -21,6 +21,7 @@ class AgentContextStore:
     async def load_context_items(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
         tree = await self._load_tree(session.snapshot_id) if session.snapshot_id else []
         memory = await self.load_latest_memory_summary(agent_id=session.agent_id)
+        todo = await self.load_latest_todo_list(agent_id=session.agent_id)
         items: list[dict[str, Any]] = [
             {
                 "role": "user",
@@ -52,6 +53,18 @@ class AgentContextStore:
                         {
                             "type": "input_text",
                             "text": "已 compact 的上下文摘要:\n" + json.dumps(memory, ensure_ascii=False),
+                        }
+                    ],
+                }
+            )
+        if todo is not None:
+            items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": _todo_context_text(todo),
                         }
                     ],
                 }
@@ -123,3 +136,49 @@ class AgentContextStore:
             )
         row = result.mappings().first()
         return row["summary_json"] if row is not None else None
+
+    async def load_latest_todo_list(self, *, agent_id: UUID) -> dict[str, Any] | None:
+        async with self._connection() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT version, items_json, note
+                    FROM agent_todo_lists
+                    WHERE agent_id = :agent_id
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """
+                ),
+                {"agent_id": agent_id},
+            )
+        row = result.mappings().first()
+        if row is None:
+            return None
+        return {
+            "version": int(row["version"]),
+            "items": _todo_items_from_json(row["items_json"]),
+            "note": row.get("note"),
+        }
+
+
+def _todo_items_from_json(value: Any) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    for item in cast(list[Any], value) if isinstance(value, list) else []:
+        if isinstance(item, dict):
+            raw_item = cast(dict[Any, Any], item)
+            items.append({str(key): raw_item[key] for key in raw_item})
+    return items
+
+
+def _todo_context_text(todo: dict[str, Any]) -> str:
+    lines = [
+        "当前 TODO 计划:",
+        f"version: {int(todo['version'])}",
+    ]
+    for item in todo.get("items", []):
+        if isinstance(item, dict):
+            item = cast(dict[str, object], item)
+            lines.append(f"- [{item.get('status')}] {item.get('id')} - {item.get('title')}")
+    if todo.get("note"):
+        lines.append(f"note: {todo['note']}")
+    return "\n".join(lines)

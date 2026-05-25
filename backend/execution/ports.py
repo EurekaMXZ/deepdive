@@ -11,6 +11,7 @@ class ToolExecutionContext:
     agent_id: UUID
     snapshot_id: UUID
     analysis_id: UUID | None = None
+    turn_id: UUID | None = None
 
 
 class SnapshotToolRepository:

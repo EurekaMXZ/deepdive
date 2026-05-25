@@ -36,6 +36,7 @@ class DatabaseMigrationTest(unittest.TestCase):
             ],
             "agent_stream_events": ["payload_json"],
             "agent_context_items": ["payload_json"],
+            "agent_todo_lists": ["items_json"],
             "context_assemblies": ["source_refs_json"],
             "tool_calls": ["arguments_json"],
             "memory_summaries": [
@@ -93,6 +94,24 @@ class DatabaseMigrationTest(unittest.TestCase):
             sql,
             r"create\s+unique\s+index\s+uq_agent_context_items_agent_idempotency\s+on\s+agent_context_items"
             r"\s+\(agent_id,\s*idempotency_key\)",
+        )
+        todo_lists_body = _create_table_body(sql, "agent_todo_lists")
+        self.assertRegex(todo_lists_body, r"\banalysis_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(todo_lists_body, r"\bagent_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(todo_lists_body, r"\bturn_id\s+uuid\b")
+        self.assertRegex(todo_lists_body, r"\btool_call_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(todo_lists_body, r"\bversion\s+integer\s+not\s+null\b")
+        self.assertRegex(todo_lists_body, r"\bitems_json\s+jsonb\s+not\s+null\b")
+        self.assertRegex(todo_lists_body, r"\bnote\s+text\b")
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_agent_todo_lists_agent_version\s+on\s+agent_todo_lists"
+            r"\s+\(agent_id,\s*version\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_agent_todo_lists_tool_call\s+on\s+agent_todo_lists"
+            r"\s+\(tool_call_id\)",
         )
         self.assertRegex(
             sql,
@@ -188,6 +207,7 @@ class DatabaseMigrationTest(unittest.TestCase):
             "ix_agent_sessions_analysis_id": "agent_sessions",
             "ix_agent_turns_agent_turn_index": "agent_turns",
             "ix_agent_context_items_agent_compacted_seq": "agent_context_items",
+            "ix_agent_todo_lists_analysis_version": "agent_todo_lists",
             "ix_agent_stream_events_agent_seq": "agent_stream_events",
             "ix_tool_calls_agent_status": "tool_calls",
             "ix_tool_calls_claim_expires_at": "tool_calls",

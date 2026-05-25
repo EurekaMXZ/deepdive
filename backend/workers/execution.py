@@ -187,6 +187,7 @@ class ExecutionCommandHandler:
                         analysis_id=event.analysis_id,
                         agent_id=row["agent_id"],
                         snapshot_id=row["snapshot_id"],
+                        turn_id=row.get("turn_id"),
                     ),
                     row["tool_name"],
                     dict(row["arguments_json"]),

@@ -14,6 +14,7 @@ from backend.events.runtime import run_consumer_forever, run_consumer_once
 from backend.execution import PermissionEngine, SourceToolExecutor
 from backend.execution.repository import PostgresSnapshotToolRepository, PostgresToolCallRepository
 from backend.storage import DEFAULT_OBJECT_BUCKET, MinioObjectStorage
+from backend.todo import PostgresTodoRepository, TodoService
 from backend.workers.asyncio_compat import run_async_worker
 from backend.workers.execution import ExecutionCommandHandler
 
@@ -113,6 +114,7 @@ async def consume_once(settings: ExecutionWorkerSettings) -> int:
             cache_config=app_config.cache,
             tavily_api_key=settings.tavily_api_key or os.environ.get("TAVILY_API_KEY", ""),
             document_service=DocumentService(repository=PostgresDocumentRepository(database), storage=storage),
+            todo_service=TodoService(repository=PostgresTodoRepository(database)),
         )
         return await run_consumer_once(
             consumer=consumer,
@@ -169,6 +171,7 @@ async def consume_forever(settings: ExecutionWorkerSettings) -> int:
             cache_config=app_config.cache,
             tavily_api_key=settings.tavily_api_key or os.environ.get("TAVILY_API_KEY", ""),
             document_service=DocumentService(repository=PostgresDocumentRepository(database), storage=storage),
+            todo_service=TodoService(repository=PostgresTodoRepository(database)),
         )
         return await run_consumer_forever(
             consumer=consumer,

@@ -53,6 +53,7 @@ from backend.execution.tool_registry import (
 from backend.ids import new_uuid7
 from backend.security import is_secret_path
 from backend.storage import ObjectStorage, evidence_key, tool_result_key
+from backend.todo import TodoRepository, TodoService, TodoToolError
 
 ToolHandler = Callable[[ToolExecutionContext, str, dict[str, Any], AppConfig | None], Awaitable[dict[str, Any]]]
 JsonObject = dict[str, Any]
@@ -85,6 +86,7 @@ class SourceToolExecutor:
         tavily_api_key: str | None = None,
         tavily_client: TavilyClient | None = None,
         document_service: DocumentService | None = None,
+        todo_service: TodoService | None = None,
     ) -> None:
         self._repository = repository
         self._storage = storage
@@ -97,6 +99,7 @@ class SourceToolExecutor:
         self._tavily_api_key = tavily_api_key if tavily_api_key is not None else os.environ.get("TAVILY_API_KEY", "")
         self._tavily_client = tavily_client or TavilySearchClient()
         self._document_service = document_service or DocumentService(repository=DocumentRepository(), storage=storage)
+        self._todo_service = todo_service or TodoService(repository=TodoRepository())
         document_tool_handler = self._execute_document_tool
         self._tool_handlers: dict[str, ToolHandler] = {
             "list_files": self._execute_list_files,
@@ -104,6 +107,7 @@ class SourceToolExecutor:
             "read_file": self._execute_read_file,
             "search_text": self._execute_search_text,
             "web_search": self._execute_web_search,
+            "todo_update": self._execute_todo_update,
             "document_create": document_tool_handler,
             "document_get": document_tool_handler,
             "document_update": document_tool_handler,
@@ -135,6 +139,8 @@ class SourceToolExecutor:
         try:
             return await handler(context, tool_name, arguments, config)
         except DocumentToolError as exc:
+            return _error(tool_name, exc.code, exc.message)
+        except TodoToolError as exc:
             return _error(tool_name, exc.code, exc.message)
         except TimeoutError:
             return _error(tool_name, "WEB_SEARCH_TIMEOUT", "Web search timed out.", retryable=True)
@@ -213,6 +219,40 @@ class SourceToolExecutor:
     ) -> dict[str, Any]:
         del config
         return await self._document_tool(context, tool_name, arguments)
+
+    async def _execute_todo_update(
+        self,
+        context: ToolExecutionContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        config: AppConfig | None,
+    ) -> dict[str, Any]:
+        del config
+        if context.analysis_id is None:
+            return _error(tool_name, "INVALID_ARGUMENTS", "todo_update requires analysis_id.")
+        result = await self._todo_service.update(
+            analysis_id=context.analysis_id,
+            agent_id=context.agent_id,
+            turn_id=context.turn_id,
+            tool_call_id=context.tool_call_id,
+            items=arguments.get("items"),
+            note=arguments.get("note"),
+        )
+        return self._ok_with_ref(
+            context,
+            tool_name,
+            context.snapshot_id,
+            result,
+            [],
+            False,
+            None,
+            scope={
+                "type": "agent_todo",
+                "analysis_id": str(context.analysis_id),
+                "snapshot_id": str(context.snapshot_id),
+                "version": result["version"],
+            },
+        )
 
     async def _list_files(self, context: ToolExecutionContext, arguments: dict[str, Any]) -> dict[str, Any]:
         path = arguments.get("path")

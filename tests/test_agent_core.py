@@ -15,7 +15,7 @@ from backend.agent import (
     ResponsesRunner,
 )
 from backend.agent.context_manager import AgentContextManager
-from backend.agent.openai_runner import IncompleteResponseStreamError
+from backend.agent.openai_runner import IncompleteResponseStreamError, _model_stream_payloads_for_response_event
 from backend.config import AppConfig
 from backend.events import EventEnvelope, EventType
 from backend.execution import DEFAULT_TOOL_POLICY_HASH, DEFAULT_TOOL_REGISTRY_VERSION
@@ -514,6 +514,44 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replayed_payloads[0]["name"], "read_file")
         self.assertIn("package.json", replayed_payloads[0]["arguments"])
         self.assertIn("这是 Vite 项目", context_text)
+
+    async def test_context_includes_latest_todo_snapshot(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=1,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            latest_todo_list={
+                "version": 2,
+                "items": [
+                    {"id": "inspect-repo", "title": "Inspect repository", "status": "completed"},
+                    {"id": "write-summary", "title": "Write summary", "status": "in_progress"},
+                ],
+                "note": "Repository shape is known.",
+            },
+        )
+
+        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+        )
+
+        context_text = "\n".join(_text_parts(context["input"]))
+        self.assertIn("当前 TODO 计划", context_text)
+        self.assertIn("[completed] inspect-repo - Inspect repository", context_text)
+        self.assertIn("[in_progress] write-summary - Write summary", context_text)
+        self.assertIn("Repository shape is known.", context_text)
 
     async def test_local_replay_does_not_duplicate_compacted_memory_summary(self) -> None:
         repository = FakeAgentRepository(
@@ -1887,7 +1925,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(persisted_summary_events[0]["response_id"], "resp_1")
 
-    async def test_reasoning_summary_stream_events_are_not_persisted_before_final_summary(self) -> None:
+    async def test_reasoning_summary_delta_is_persisted_before_final_summary(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         snapshot_id = new_uuid7()
@@ -1969,9 +2007,22 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         persisted_summary_events = [
             event for event in repository.stream_events if event["event_type"].startswith("model_reasoning_summary")
         ]
-        self.assertEqual([event["event_type"] for event in persisted_summary_events], ["model_reasoning_summary"])
+        self.assertEqual(
+            [event["event_type"] for event in persisted_summary_events],
+            ["model_reasoning_summary.delta", "model_reasoning_summary"],
+        )
         self.assertEqual(
             persisted_summary_events[0]["payload"],
+            {
+                "type": "model_reasoning_summary.delta",
+                "text": "我将读取",
+                "item_id": "rs_1",
+                "response_id": "resp_1",
+            },
+        )
+        self.assertEqual(persisted_summary_events[0]["response_id"], "resp_1")
+        self.assertEqual(
+            persisted_summary_events[1]["payload"],
             {
                 "type": "model_reasoning_summary",
                 "text": "我将读取入口文件。",
@@ -1979,7 +2030,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 "response_id": "resp_1",
             },
         )
-        self.assertEqual(persisted_summary_events[0]["response_id"], "resp_1")
+        self.assertEqual(persisted_summary_events[1]["response_id"], "resp_1")
 
     async def test_reasoning_summary_delta_done_is_aggregated_into_final_summary(self) -> None:
         analysis_id = new_uuid7()
@@ -2076,9 +2127,30 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         persisted_summary_events = [
             event for event in repository.stream_events if event["event_type"].startswith("model_reasoning_summary")
         ]
-        self.assertEqual([event["event_type"] for event in persisted_summary_events], ["model_reasoning_summary"])
+        self.assertEqual(
+            [event["event_type"] for event in persisted_summary_events],
+            ["model_reasoning_summary.delta", "model_reasoning_summary.delta", "model_reasoning_summary"],
+        )
         self.assertEqual(
             persisted_summary_events[0]["payload"],
+            {
+                "type": "model_reasoning_summary.delta",
+                "text": "我将读取",
+                "item_id": "rs_1",
+                "response_id": "resp_1",
+            },
+        )
+        self.assertEqual(
+            persisted_summary_events[1]["payload"],
+            {
+                "type": "model_reasoning_summary.delta",
+                "text": "仓库结构。",
+                "item_id": "rs_1",
+                "response_id": "resp_1",
+            },
+        )
+        self.assertEqual(
+            persisted_summary_events[2]["payload"],
             {
                 "type": "model_reasoning_summary",
                 "text": "我将读取仓库结构。",
@@ -4245,7 +4317,11 @@ class StreamingRawSseEventsRunner(ResponsesRunner):
         on_raw_sse_event = request.get("on_raw_sse_event")
         if on_raw_sse_event is not None:
             for event in self._events:
-                await on_raw_sse_event(event["event_name"], event["payload"])
+                for event_name, payload in _model_stream_payloads_for_response_event(
+                    event["event_name"],
+                    event["payload"],
+                ):
+                    await on_raw_sse_event(event_name, payload)
         return self._response
 
 
@@ -4285,6 +4361,7 @@ class FakeAgentRepository(AgentRepository):
         context_item_batches: list[list[dict]] | None = None,
         uncompacted_context_items: list[dict] | None = None,
         latest_memory_summary: dict | None = None,
+        latest_todo_list: dict | None = None,
         refreshed_session: AgentSessionState | None = None,
     ) -> None:
         self.session = session
@@ -4299,6 +4376,7 @@ class FakeAgentRepository(AgentRepository):
         self.context_item_batches = list(context_item_batches or [])
         self.uncompacted_context_items = list(uncompacted_context_items or [])
         self.latest_memory_summary = latest_memory_summary
+        self.latest_todo_list = latest_todo_list
         self.instruction_files = instruction_files or []
         self.config_snapshot_json = config_snapshot_json
         self.handled_event_ids = handled_event_ids or set()
@@ -4360,6 +4438,18 @@ class FakeAgentRepository(AgentRepository):
                     ],
                 }
             )
+        if self.latest_todo_list is not None:
+            lines = [
+                "当前 TODO 计划:",
+                f"version: {self.latest_todo_list['version']}",
+                *[
+                    f"- [{item['status']}] {item['id']} - {item['title']}"
+                    for item in self.latest_todo_list.get("items", [])
+                ],
+            ]
+            if self.latest_todo_list.get("note"):
+                lines.append(f"note: {self.latest_todo_list['note']}")
+            items.append({"role": "user", "content": [{"type": "input_text", "text": "\n".join(lines)}]})
         return items
 
     async def load_uncompacted_context_items(self, *, agent_id, limit=12):
@@ -4369,6 +4459,10 @@ class FakeAgentRepository(AgentRepository):
     async def load_latest_memory_summary(self, *, agent_id):
         del agent_id
         return self.latest_memory_summary
+
+    async def load_latest_todo_list(self, *, agent_id):
+        del agent_id
+        return self.latest_todo_list
 
     async def load_instruction_files(self, *, session: AgentSessionState) -> list[dict]:
         del session

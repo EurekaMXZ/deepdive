@@ -293,6 +293,24 @@ Index(
 )
 
 
+agent_todo_lists = Table(
+    "agent_todo_lists",
+    metadata,
+    uuid_pk(),
+    Column("analysis_id", UUID(as_uuid=True), ForeignKey("analyses.id"), nullable=False),
+    Column("agent_id", UUID(as_uuid=True), ForeignKey("agent_sessions.id"), nullable=False),
+    Column("turn_id", UUID(as_uuid=True), ForeignKey("agent_turns.id")),
+    Column("tool_call_id", UUID(as_uuid=True), ForeignKey("tool_calls.id"), nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("items_json", JSONB, nullable=False),
+    Column("note", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_agent_todo_lists_agent_version", agent_todo_lists.c.agent_id, agent_todo_lists.c.version, unique=True)
+Index("uq_agent_todo_lists_tool_call", agent_todo_lists.c.tool_call_id, unique=True)
+Index("ix_agent_todo_lists_analysis_version", agent_todo_lists.c.analysis_id, agent_todo_lists.c.version)
+
+
 context_assemblies = Table(
     "context_assemblies",
     metadata,

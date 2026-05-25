@@ -214,6 +214,18 @@ CREATE TABLE agent_context_windows (
     created_at timestamptz not null
 );
 
+CREATE TABLE agent_todo_lists (
+    id uuid primary key default uuidv7(),
+    analysis_id uuid not null references analyses(id),
+    agent_id uuid not null references agent_sessions(id),
+    turn_id uuid references agent_turns(id),
+    tool_call_id uuid not null references tool_calls(id),
+    version integer not null,
+    items_json jsonb not null,
+    note text,
+    created_at timestamptz not null
+);
+
 CREATE TABLE context_assemblies (
     id uuid primary key default uuidv7(),
     agent_id uuid not null references agent_sessions(id),
@@ -445,6 +457,15 @@ CREATE UNIQUE INDEX uq_agent_context_windows_agent_generation
 
 CREATE INDEX ix_agent_context_windows_agent_created_at
     ON agent_context_windows (agent_id, created_at);
+
+CREATE UNIQUE INDEX uq_agent_todo_lists_agent_version
+    ON agent_todo_lists (agent_id, version);
+
+CREATE UNIQUE INDEX uq_agent_todo_lists_tool_call
+    ON agent_todo_lists (tool_call_id);
+
+CREATE INDEX ix_agent_todo_lists_analysis_version
+    ON agent_todo_lists (analysis_id, version);
 
 CREATE INDEX ix_tool_calls_agent_status
     ON tool_calls (agent_id, status);

@@ -214,6 +214,9 @@ class PostgresAgentRepository:
     async def load_latest_memory_summary(self, *, agent_id: UUID) -> dict[str, Any] | None:
         return await self._context_store.load_latest_memory_summary(agent_id=agent_id)
 
+    async def load_latest_todo_list(self, *, agent_id: UUID) -> dict[str, Any] | None:
+        return await self._context_store.load_latest_todo_list(agent_id=agent_id)
+
     async def load_instruction_files(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
         return await self._context_store.load_instruction_files(session=session)
 

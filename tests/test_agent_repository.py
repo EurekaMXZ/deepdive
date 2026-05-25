@@ -74,6 +74,37 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("path <> '.env'", tree_sql)
         self.assertIn("lower(path) NOT LIKE '%.pem'", tree_sql)
 
+    async def test_load_context_items_includes_latest_todo_snapshot(self) -> None:
+        snapshot_id = new_uuid7()
+        connection = FakeConnection(
+            row_batches=[
+                [{"path": "README.md"}],
+                [],
+                [
+                    {
+                        "version": 4,
+                        "items_json": [
+                            {"id": "inspect-repo", "title": "Inspect repository", "status": "completed"},
+                            {"id": "write-summary", "title": "Write summary", "status": "in_progress"},
+                        ],
+                        "note": "Repository shape is known.",
+                    }
+                ],
+            ]
+        )
+        repository = PostgresAgentRepository(connection)
+
+        items = await repository.load_context_items(session=_session(snapshot_id=snapshot_id))
+
+        todo_item = next(item for item in items if "当前 TODO 计划" in item["content"][0]["text"])
+        todo_text = todo_item["content"][0]["text"]
+        self.assertIn("version: 4", todo_text)
+        self.assertIn("[completed] inspect-repo - Inspect repository", todo_text)
+        self.assertIn("[in_progress] write-summary - Write summary", todo_text)
+        self.assertIn("Repository shape is known.", todo_text)
+        executed_sql = "\n".join(str(statement) for statement, _ in connection.executed)
+        self.assertIn("FROM agent_todo_lists", executed_sql)
+
     async def test_has_turn_for_event_queries_trigger_event_id(self) -> None:
         agent_id = new_uuid7()
         event_id = new_uuid7()

@@ -96,7 +96,7 @@ class OpenAIWebSearchToolConfig:
 
 @dataclass(frozen=True)
 class ToolsConfig:
-    enabled: tuple[str, ...] = ("list_files", "search_file", "search_text", "read_file")
+    enabled: tuple[str, ...] = ("list_files", "search_file", "search_text", "read_file", "todo_update")
     read_file: ReadFileToolConfig = field(default_factory=ReadFileToolConfig)
     search_text: SearchTextToolConfig = field(default_factory=SearchTextToolConfig)
     web_search: WebSearchToolConfig = field(default_factory=WebSearchToolConfig)
