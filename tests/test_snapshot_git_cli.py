@@ -11,7 +11,7 @@ from backend.snapshot.models import SnapshotBuildError
 
 
 class GitCommandRunnerTest(unittest.TestCase):
-    def test_fetch_shallow_partial_ref_initializes_bare_repo_and_fetches_filtered_ref(self) -> None:
+    def test_fetch_shallow_ref_initializes_bare_repo_and_fetches_single_ref_without_lazy_blob_filter(self) -> None:
         calls: list[list[str]] = []
 
         def fake_popen(command, **kwargs):
@@ -22,7 +22,7 @@ class GitCommandRunnerTest(unittest.TestCase):
         runner = GitCommandRunner()
 
         with patch("backend.snapshot.git_cli.subprocess.Popen", side_effect=fake_popen):
-            runner.fetch_shallow_partial_ref(
+            runner.fetch_shallow_ref(
                 "https://github.com/microsoft/vscode.git",
                 Path("repo.git"),
                 "main",
@@ -36,18 +36,18 @@ class GitCommandRunnerTest(unittest.TestCase):
             ["-C", "repo.git", "remote", "add", "origin", "https://github.com/microsoft/vscode.git"],
         )
         self.assertEqual(
-            calls[2][-8:],
+            calls[2][-7:],
             [
                 "-C",
                 "repo.git",
                 "fetch",
                 "--depth=1",
-                "--filter=blob:none",
                 "--no-tags",
                 "origin",
                 "main",
             ],
         )
+        self.assertNotIn("--filter=blob:none", calls[2])
 
     def test_clone_mirror_rejects_repository_url_with_userinfo(self) -> None:
         runner = GitCommandRunner()
@@ -64,14 +64,14 @@ class GitCommandRunnerTest(unittest.TestCase):
 
         run_mock.assert_not_called()
 
-    def test_fetch_shallow_partial_ref_rejects_repository_url_with_userinfo(self) -> None:
+    def test_fetch_shallow_ref_rejects_repository_url_with_userinfo(self) -> None:
         runner = GitCommandRunner()
 
         with (
             patch("backend.snapshot.git_cli.subprocess.run") as run_mock,
             self.assertRaisesRegex(SnapshotBuildError, "credentials"),
         ):
-            runner.fetch_shallow_partial_ref(
+            runner.fetch_shallow_ref(
                 "https://token123@github.com/example/private.git",
                 Path("repo.git"),
                 "main",

@@ -26,7 +26,7 @@ class GitSnapshotBuilder:
         with tempfile.TemporaryDirectory(prefix="deepdive-snapshot-") as tmp:
             tmp_path = Path(tmp)
             mirror = tmp_path / "repo.git"
-            self._git.fetch_shallow_partial_ref(
+            self._git.fetch_shallow_ref(
                 request.repository_url,
                 mirror,
                 request.requested_ref,

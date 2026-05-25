@@ -60,7 +60,7 @@ class GitCommandRunner:
         _reject_unsafe_repository_url(repository_url, allowed_hosts=self.allowed_repository_hosts, require_url=True)
         self.run(["clone", "--mirror", repository_url, str(mirror_path)], timeout_seconds=timeout_seconds)
 
-    def fetch_shallow_partial_ref(
+    def fetch_shallow_ref(
         self, repository_url: str, mirror_path: Path, ref: str, *, timeout_seconds: int
     ) -> None:
         _reject_unsafe_repository_url(repository_url, allowed_hosts=self.allowed_repository_hosts, require_url=True)
@@ -75,7 +75,6 @@ class GitCommandRunner:
                 str(mirror_path),
                 "fetch",
                 "--depth=1",
-                "--filter=blob:none",
                 "--no-tags",
                 "origin",
                 ref,

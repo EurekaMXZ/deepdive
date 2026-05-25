@@ -57,7 +57,7 @@ class SnapshotBuilderTest(unittest.TestCase):
         self.assertEqual(instruction.depth, 0)
         self.assertEqual(storage.get_bytes(instruction.content_ref), b"Root instructions\n")
 
-    def test_git_builder_does_not_upload_git_bundle_for_partial_snapshot(self) -> None:
+    def test_git_builder_does_not_upload_git_bundle_for_shallow_snapshot(self) -> None:
         storage = SpyStorage()
         runner = FakeGitRunner()
 
@@ -74,7 +74,7 @@ class SnapshotBuilderTest(unittest.TestCase):
         self.assertIsNone(result.git_bundle_key)
         self.assertEqual(storage.put_file_calls, [])
 
-    def test_git_builder_skips_bundle_creation_in_partial_snapshot_mode(self) -> None:
+    def test_git_builder_skips_bundle_creation_in_shallow_snapshot_mode(self) -> None:
         storage = SpyStorage()
         runner = LargeBundleGitRunner()
 
@@ -323,7 +323,7 @@ class FakeGitRunner:
         self.cloned_repository_url = repository_url
         mirror_path.mkdir()
 
-    def fetch_shallow_partial_ref(
+    def fetch_shallow_ref(
         self, repository_url: str, mirror_path: Path, ref: str, *, timeout_seconds: int
     ) -> None:
         del timeout_seconds
