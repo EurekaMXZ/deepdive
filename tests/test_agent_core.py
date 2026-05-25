@@ -1559,6 +1559,8 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("source snapshot tools", context["instructions"])
         self.assertIn("web search tools", context["instructions"])
         self.assertIn("document artifact tools", context["instructions"])
+        self.assertIn("local repository evidence is insufficient", context["instructions"])
+        self.assertIn("use web search tools to supplement", context["instructions"])
         self.assertIn("multiple focused documents arranged in a document tree", context["instructions"])
         self.assertIn("multiple structured sections", context["instructions"])
         self.assertNotIn("Use only the provided read-only tools", context["instructions"])
@@ -1638,6 +1640,121 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(runner.requests[0]["include"], ["web_search_call.action.sources"])
+        self.assertNotIn("tool_choice", runner.requests[0])
+
+    async def test_web_search_tool_choice_required_is_sent_when_search_tool_available(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            config_snapshot_json={
+                "tools": {
+                    "enabled": ["read_file"],
+                    "web_search_tool_choice": "required",
+                    "openai_web_search": {
+                        "enabled": True,
+                    },
+                }
+            },
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_1",
+                output_text="分析完成",
+                tool_calls=[],
+                usage={"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        self.assertEqual(runner.requests[0]["tool_choice"], "required")
+
+    async def test_web_search_tool_choice_required_tavily_forces_function_tool(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            config_snapshot_json={
+                "tools": {
+                    "enabled": ["read_file", "web_search"],
+                    "web_search_tool_choice": "required_tavily",
+                    "openai_web_search": {
+                        "enabled": True,
+                    },
+                }
+            },
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_1",
+                output_text="分析完成",
+                tool_calls=[],
+                usage={"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        self.assertEqual(runner.requests[0]["tool_choice"], {"type": "function", "name": "web_search"})
 
     async def test_agent_turn_output_is_stored_and_referenced(self) -> None:
         analysis_id = new_uuid7()

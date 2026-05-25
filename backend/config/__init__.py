@@ -14,6 +14,7 @@ DEFAULT_ENV_FILE_NAME = ".env"
 ENV_FILE_ENV_VAR = "DEEPDIVE_ENV_FILE"
 DEFAULT_CONFIG_VERSION = "repository-analysis-config-v1"
 TAVILY_WEB_SEARCH_MAX_RESULTS = 10
+WEB_SEARCH_TOOL_CHOICE_VALUES = frozenset({"auto", "required", "required_tavily"})
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ class OpenAIWebSearchToolConfig:
 @dataclass(frozen=True)
 class ToolsConfig:
     enabled: tuple[str, ...] = ("list_files", "search_file", "search_text", "read_file", "todo_update")
+    web_search_tool_choice: str = "auto"
     read_file: ReadFileToolConfig = field(default_factory=ReadFileToolConfig)
     search_text: SearchTextToolConfig = field(default_factory=SearchTextToolConfig)
     web_search: WebSearchToolConfig = field(default_factory=WebSearchToolConfig)
@@ -257,6 +259,9 @@ def load_app_config_from_env() -> AppConfig:
         ),
         tools=ToolsConfig(
             enabled=_csv_env("TOOLS_ENABLED", default.tools.enabled),
+            web_search_tool_choice=_validate_web_search_tool_choice(
+                os.environ.get("WEB_SEARCH_TOOL_CHOICE", default.tools.web_search_tool_choice)
+            ),
             read_file=ReadFileToolConfig(
                 default_lines=_int_env("TOOL_READ_FILE_DEFAULT_LINES", default.tools.read_file.default_lines),
                 max_lines=_int_env("TOOL_READ_FILE_MAX_LINES", default.tools.read_file.max_lines),
@@ -459,6 +464,9 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
         ),
         tools=ToolsConfig(
             enabled=_tuple_value(tools_json.get("enabled"), default.tools.enabled),
+            web_search_tool_choice=_validate_web_search_tool_choice(
+                str(tools_json.get("web_search_tool_choice") or default.tools.web_search_tool_choice)
+            ),
             read_file=ReadFileToolConfig(
                 default_lines=_int_value(read_file_json.get("default_lines"), default.tools.read_file.default_lines),
                 max_lines=_int_value(read_file_json.get("max_lines"), default.tools.read_file.max_lines),
@@ -555,6 +563,13 @@ def _validate_web_search_config(config: WebSearchToolConfig) -> WebSearchToolCon
     if config.max_query_chars < 1:
         raise ValueError("web_search.max_query_chars must be at least 1")
     return config
+
+
+def _validate_web_search_tool_choice(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in WEB_SEARCH_TOOL_CHOICE_VALUES:
+        raise ValueError("web_search_tool_choice must be one of auto, required, required_tavily")
+    return normalized
 
 
 def _validate_openai_web_search_config(config: OpenAIWebSearchToolConfig) -> OpenAIWebSearchToolConfig:

@@ -8,7 +8,7 @@ from uuid import UUID
 from backend.agent.context_manager import AgentContextManager
 from backend.agent.models import AgentSessionState, ModelResponse
 from backend.agent.ports import ContextAssemblyRepository
-from backend.config import app_config_from_json
+from backend.config import ToolsConfig, app_config_from_json
 from backend.execution import ToolRegistry
 from backend.storage import ObjectStorage
 
@@ -17,7 +17,7 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "Use the provided source snapshot tools, web search tools, and document artifact tools only for their intended analysis workflow."
 )
 DEFAULT_DEVELOPER_INSTRUCTION = (
-    "Analyze the repository by inspecting the file tree, reading and searching relevant files, and using web search only when current external context is needed. "
+    "Analyze the repository by inspecting the file tree and reading/searching files; when local repository evidence is insufficient, use web search tools to supplement it. "
     "Write final analysis material only as platform document artifact tools, not as repository files. "
     "Create multiple focused documents arranged in a document tree: use folder nodes for broad areas such as backend, frontend, deployment, or operations; "
     "each document must focus on one bounded subsystem or concern and should contain multiple structured sections instead of one omnibus report. "
@@ -112,7 +112,8 @@ class ContextAssembler:
                 tool_schema_hash=_sha256_json(response_tools),
                 token_estimate=token_estimate,
             )
-        return {
+        tool_choice = _web_search_tool_choice(config.tools, response_tools)
+        result: dict[str, Any] = {
             "instructions": instructions,
             "input": input_items,
             "input_ref": input_ref,
@@ -123,6 +124,9 @@ class ContextAssembler:
             if config.tools.openai_web_search.enabled and config.tools.openai_web_search.include_sources
             else [],
         }
+        if tool_choice is not None:
+            result["tool_choice"] = tool_choice
+        return result
 
     async def _local_history_context_items(
         self, *, session: AgentSessionState, exclude_call_ids: set[str] | None = None
@@ -292,6 +296,25 @@ def _call_ids_from_items(items: list[dict[str, Any]]) -> set[str]:
         if isinstance(call_id, str) and call_id:
             call_ids.add(call_id)
     return call_ids
+
+
+def _web_search_tool_choice(
+    config: ToolsConfig,
+    response_tools: list[dict[str, Any]],
+) -> str | dict[str, str] | None:
+    choice = config.web_search_tool_choice
+    if choice == "auto":
+        return None
+
+    has_tavily_function = any(
+        tool.get("type") == "function" and tool.get("name") == "web_search" for tool in response_tools
+    )
+    has_hosted_web_search = any(tool.get("type") == "web_search" for tool in response_tools)
+    if choice == "required":
+        return "required" if has_tavily_function or has_hosted_web_search else None
+    if choice == "required_tavily":
+        return {"type": "function", "name": "web_search"} if has_tavily_function else None
+    return None
 
 
 def _context_item_call_id(item: dict[str, Any]) -> str | None:

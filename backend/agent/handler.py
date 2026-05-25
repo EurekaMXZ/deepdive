@@ -318,6 +318,8 @@ class AgentCommandHandler:
             request["context_management"] = context_management
         if context.get("include"):
             request["include"] = context["include"]
+        if context.get("tool_choice") is not None:
+            request["tool_choice"] = context["tool_choice"]
         if not compaction.compacted and use_previous_response_id:
             request["previous_response_id"] = session.latest_response_id
         try:

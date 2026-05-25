@@ -234,6 +234,7 @@ class EnvConfigTest(unittest.TestCase):
                 "OPENAI_WEB_SEARCH_INCLUDE_SOURCES": "true",
                 "OPENAI_WEB_SEARCH_ALLOWED_DOMAINS": "example.com,docs.example.com",
                 "OPENAI_WEB_SEARCH_RETURN_TOKEN_BUDGET": "default",
+                "WEB_SEARCH_TOOL_CHOICE": "required_tavily",
                 "TAVILY_API_KEY": "tvly-test-secret",
             },
             clear=True,
@@ -254,6 +255,7 @@ class EnvConfigTest(unittest.TestCase):
         self.assertEqual(config.tools.web_search.max_results, 8)
         self.assertEqual(config.tools.web_search.timeout_seconds, 12)
         self.assertEqual(config.tools.web_search.max_query_chars, 400)
+        self.assertEqual(config.tools.web_search_tool_choice, "required_tavily")
         self.assertTrue(config.tools.openai_web_search.enabled)
         self.assertEqual(config.tools.openai_web_search.search_context_size, "high")
         self.assertFalse(config.tools.openai_web_search.external_web_access)
@@ -268,6 +270,7 @@ class EnvConfigTest(unittest.TestCase):
             {
                 "tools": {
                     "enabled": ["web_search", "document_create"],
+                    "web_search_tool_choice": "required",
                     "web_search": {
                         "max_results": 6,
                         "timeout_seconds": 9,
@@ -289,6 +292,7 @@ class EnvConfigTest(unittest.TestCase):
         self.assertEqual(config.tools.web_search.max_results, 6)
         self.assertEqual(config.tools.web_search.timeout_seconds, 9)
         self.assertEqual(config.tools.web_search.max_query_chars, 350)
+        self.assertEqual(config.tools.web_search_tool_choice, "required")
         self.assertTrue(config.tools.openai_web_search.enabled)
         self.assertEqual(config.tools.openai_web_search.search_context_size, "low")
         self.assertFalse(config.tools.openai_web_search.external_web_access)
@@ -338,6 +342,7 @@ class EnvConfigTest(unittest.TestCase):
             {"TOOL_WEB_SEARCH_MAX_RESULTS": "11"},
             {"TOOL_WEB_SEARCH_TIMEOUT_SECONDS": "0"},
             {"TOOL_WEB_SEARCH_MAX_QUERY_CHARS": "0"},
+            {"WEB_SEARCH_TOOL_CHOICE": "force_everything"},
         ]
 
         for env in invalid_envs:
@@ -358,6 +363,8 @@ class EnvConfigTest(unittest.TestCase):
         for section in invalid_jsons:
             with self.subTest(section=section), self.assertRaises(ValueError):
                 app_config_from_json({"tools": {"web_search": section}})
+        with self.assertRaises(ValueError):
+            app_config_from_json({"tools": {"web_search_tool_choice": "force_everything"}})
 
 
 if __name__ == "__main__":
