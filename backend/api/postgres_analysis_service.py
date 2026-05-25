@@ -11,8 +11,9 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.api.pagination import decode_list_cursor
-from backend.api.records import AgentStreamEventRecord, AnalysisRecord
+from backend.api.records import AgentStreamEventRecord, AnalysisRecord, RepositorySearchRecord
 from backend.api.repository_query import parse_repository_suggestion_query
+from backend.api.repository_search import canonicalize_repository_url, normalize_repository_search_query
 from backend.config import DEFAULT_CONFIG_VERSION, AppConfig, create_config_snapshot
 from backend.db.connections import AsyncDbConnection
 from backend.events import EventEnvelope, EventType
@@ -52,6 +53,8 @@ class PostgresAnalysisService:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
         config_snapshot = create_config_snapshot(self._config, config_version=self._config_version)
+        canonical_repository = canonicalize_repository_url(repository_url)
+        repository_url = canonical_repository.repository_url
         repository_url_hash = _sha256_text(repository_url)
 
         async with self._database.begin() as connection:
@@ -194,6 +197,91 @@ class PostgresAnalysisService:
                     },
                 )
             )
+            if tenant_id is not None and created_by_user_id is not None:
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO analysis_repositories (
+                            id,
+                            tenant_id,
+                            created_by_user_id,
+                            repository_url,
+                            repository_url_hash,
+                            repository_host,
+                            repository_owner,
+                            repository_name,
+                            repository_label,
+                            search_text,
+                            latest_analysis_id,
+                            latest_status,
+                            latest_requested_ref,
+                            latest_resolved_commit_sha,
+                            analysis_count,
+                            completed_analysis_count,
+                            last_analyzed_at,
+                            created_at,
+                            updated_at
+                        )
+                        VALUES (
+                            :id,
+                            :tenant_id,
+                            :created_by_user_id,
+                            :repository_url,
+                            :repository_url_hash,
+                            :repository_host,
+                            :repository_owner,
+                            :repository_name,
+                            :repository_label,
+                            :search_text,
+                            :latest_analysis_id,
+                            :latest_status,
+                            :latest_requested_ref,
+                            :latest_resolved_commit_sha,
+                            :analysis_count,
+                            :completed_analysis_count,
+                            :last_analyzed_at,
+                            :created_at,
+                            :updated_at
+                        )
+                        ON CONFLICT (tenant_id, created_by_user_id, repository_url_hash) DO UPDATE
+                        SET repository_url = EXCLUDED.repository_url,
+                            repository_host = EXCLUDED.repository_host,
+                            repository_owner = EXCLUDED.repository_owner,
+                            repository_name = EXCLUDED.repository_name,
+                            repository_label = EXCLUDED.repository_label,
+                            search_text = EXCLUDED.search_text,
+                            latest_analysis_id = EXCLUDED.latest_analysis_id,
+                            latest_status = EXCLUDED.latest_status,
+                            latest_requested_ref = EXCLUDED.latest_requested_ref,
+                            latest_resolved_commit_sha = EXCLUDED.latest_resolved_commit_sha,
+                            analysis_count = analysis_repositories.analysis_count + 1,
+                            completed_analysis_count = analysis_repositories.completed_analysis_count,
+                            last_analyzed_at = EXCLUDED.last_analyzed_at,
+                            updated_at = EXCLUDED.updated_at
+                        """
+                    ),
+                    {
+                        "id": new_uuid7(),
+                        "tenant_id": tenant_id,
+                        "created_by_user_id": created_by_user_id,
+                        "repository_url": canonical_repository.repository_url,
+                        "repository_url_hash": repository_url_hash,
+                        "repository_host": canonical_repository.repository_host,
+                        "repository_owner": canonical_repository.repository_owner,
+                        "repository_name": canonical_repository.repository_name,
+                        "repository_label": canonical_repository.repository_label,
+                        "search_text": canonical_repository.search_text,
+                        "latest_analysis_id": analysis_id,
+                        "latest_status": "queued",
+                        "latest_requested_ref": requested_ref,
+                        "latest_resolved_commit_sha": None,
+                        "analysis_count": 1,
+                        "completed_analysis_count": 0,
+                        "last_analyzed_at": now,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
 
         return AnalysisRecord(
             analysis_id=analysis_id,
@@ -338,6 +426,64 @@ class PostgresAnalysisService:
                 params,
             )
             return [_record_from_row(row) for row in result.mappings().all()]
+
+    async def search_repositories(
+        self,
+        *,
+        query: str,
+        limit: int = 8,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> list[RepositorySearchRecord]:
+        normalized_query = normalize_repository_search_query(query)
+        if not normalized_query or tenant_id is None or created_by_user_id is None:
+            return []
+        search_pattern = f"%{normalized_query}%"
+        prefix_pattern = f"{normalized_query}%"
+        async with self._database.begin() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT
+                        repository_url,
+                        repository_label,
+                        latest_analysis_id,
+                        latest_status,
+                        latest_requested_ref,
+                        latest_resolved_commit_sha,
+                        analysis_count,
+                        completed_analysis_count,
+                        last_analyzed_at,
+                        CASE
+                            WHEN lower(repository_label) = :query THEN 100
+                            WHEN lower(repository_label) LIKE :prefix_pattern THEN 90
+                            WHEN lower(coalesce(repository_name, '')) = :query THEN 85
+                            WHEN lower(coalesce(repository_name, '')) LIKE :prefix_pattern THEN 80
+                            WHEN search_text LIKE :search_pattern THEN 70
+                            ELSE 50 + similarity(search_text, :query) * 30
+                        END AS rank
+                    FROM analysis_repositories
+                    WHERE tenant_id = :tenant_id
+                      AND created_by_user_id = :created_by_user_id
+                      AND (
+                          search_text LIKE :search_pattern
+                          OR repository_label % :query
+                          OR search_text % :query
+                      )
+                    ORDER BY rank DESC, last_analyzed_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {
+                    "query": normalized_query,
+                    "search_pattern": search_pattern,
+                    "prefix_pattern": prefix_pattern,
+                    "limit": limit,
+                    "tenant_id": tenant_id,
+                    "created_by_user_id": created_by_user_id,
+                },
+            )
+        return [_repository_search_record_from_row(row) for row in result.mappings().all()]
 
     async def get(
         self,
@@ -589,6 +735,20 @@ def _record_from_row(row: Mapping[Any, Any]) -> AnalysisRecord:
         error_message=cast(str | None, row.get("error_message")),
         tenant_id=cast(UUID | None, row.get("tenant_id")),
         created_by_user_id=cast(UUID | None, row.get("created_by_user_id")),
+    )
+
+
+def _repository_search_record_from_row(row: Mapping[Any, Any]) -> RepositorySearchRecord:
+    return RepositorySearchRecord(
+        repository_url=str(row["repository_url"]),
+        repository_label=str(row["repository_label"]),
+        latest_analysis_id=cast(UUID, row["latest_analysis_id"]),
+        latest_status=str(row["latest_status"]),
+        latest_requested_ref=str(row["latest_requested_ref"]),
+        latest_resolved_commit_sha=cast(str | None, row.get("latest_resolved_commit_sha")),
+        analysis_count=int(row["analysis_count"]),
+        completed_analysis_count=int(row["completed_analysis_count"]),
+        last_analyzed_at=cast(datetime, row["last_analyzed_at"]),
     )
 
 

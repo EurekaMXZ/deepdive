@@ -28,3 +28,16 @@ class AgentStreamEventRecord:
     seq: int
     event_type: str
     payload_json: dict[str, Any]
+
+
+@dataclass
+class RepositorySearchRecord:
+    repository_url: str
+    repository_label: str
+    latest_analysis_id: UUID
+    latest_status: str
+    latest_requested_ref: str
+    latest_resolved_commit_sha: str | None
+    analysis_count: int
+    completed_analysis_count: int
+    last_analyzed_at: datetime

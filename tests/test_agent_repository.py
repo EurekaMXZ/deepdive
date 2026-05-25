@@ -610,6 +610,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FOR UPDATE", str(connection.executed[0][0]))
         self.assertIn("UPDATE agent_turns", executed_sql)
         self.assertIn("UPDATE analyses", executed_sql)
+        self.assertIn("UPDATE analysis_repositories", executed_sql)
         self.assertIn("UPDATE agent_sessions", executed_sql)
         self.assertIn("INSERT INTO agent_context_items", executed_sql)
         self.assertIn("INSERT INTO agent_stream_events", executed_sql)

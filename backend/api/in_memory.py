@@ -6,8 +6,14 @@ from typing import Protocol
 from uuid import UUID
 
 from backend.api.pagination import cursor_offset, decode_list_cursor
-from backend.api.records import AgentStreamEventRecord, AnalysisRecord
+from backend.api.records import AgentStreamEventRecord, AnalysisRecord, RepositorySearchRecord
 from backend.api.repository_query import parse_repository_suggestion_query
+from backend.api.repository_search import (
+    RepositoryIndexEntry,
+    canonicalize_repository_url,
+    repository_record_from_entry,
+    repository_search_score,
+)
 from backend.events import EventEnvelope, EventType
 from backend.ids import new_uuid7
 
@@ -65,6 +71,46 @@ class InMemoryAnalysisService:
             )
         )
         return record
+
+    def search_repositories(
+        self,
+        *,
+        query: str,
+        limit: int = 8,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> list[RepositorySearchRecord]:
+        entries: dict[str, RepositoryIndexEntry] = {}
+        for record in self._records.values():
+            if not _record_matches_scope(record, tenant_id, created_by_user_id):
+                continue
+            canonical = canonicalize_repository_url(record.repository_url)
+            key = canonical.repository_url
+            entry = entries.get(key)
+            if entry is None:
+                entries[key] = RepositoryIndexEntry(
+                    canonical=canonical,
+                    latest_analysis=record,
+                    analysis_count=1,
+                    completed_analysis_count=1 if record.status == "completed" else 0,
+                )
+                continue
+            entry.analysis_count += 1
+            if record.status == "completed":
+                entry.completed_analysis_count += 1
+            if (record.updated_at, record.analysis_id) > (
+                entry.latest_analysis.updated_at,
+                entry.latest_analysis.analysis_id,
+            ):
+                entry.latest_analysis = record
+
+        scored_records = [
+            (score, search_record)
+            for search_record in (repository_record_from_entry(entry) for entry in entries.values())
+            if (score := repository_search_score(search_record, query)) > 0
+        ]
+        scored_records.sort(key=lambda item: (item[0], item[1].last_analyzed_at), reverse=True)
+        return [record for _, record in scored_records[:limit]]
 
     def list(
         self,

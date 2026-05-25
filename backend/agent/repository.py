@@ -730,6 +730,7 @@ class PostgresAgentRepository:
             )
             if int(getattr(result, "rowcount", 0) or 0) <= 0:
                 return False
+            await self._mark_repository_index_completed(connection, analysis_id=analysis_id, now=now)
             if output_items:
                 await self._append_model_output_items_on_connection(
                     connection,
@@ -962,6 +963,8 @@ class PostgresAgentRepository:
                 ),
                 {"agent_id": agent_id, "now": now},
             )
+            if int(getattr(result, "rowcount", 0) or 0) > 0:
+                await self._mark_repository_index_completed(connection, analysis_id=analysis_id, now=now)
         del output_text
         return int(getattr(result, "rowcount", 0) or 0) > 0
 
@@ -996,7 +999,49 @@ class PostgresAgentRepository:
                 ),
                 {"agent_id": agent_id, "now": now},
             )
+            if int(getattr(result, "rowcount", 0) or 0) > 0:
+                await self._mark_repository_index_failed(connection, analysis_id=analysis_id, now=now)
         return int(getattr(result, "rowcount", 0) or 0) > 0
+
+    async def _mark_repository_index_completed(
+        self, connection: AsyncDbConnection, *, analysis_id: UUID, now: datetime
+    ) -> None:
+        await connection.execute(
+            text(
+                """
+                UPDATE analysis_repositories ar
+                SET latest_status = 'completed',
+                    latest_resolved_commit_sha = snap.resolved_commit_sha,
+                    completed_analysis_count = completed_analysis_count + 1,
+                    last_analyzed_at = :now,
+                    updated_at = :now
+                FROM analyses a
+                JOIN agent_sessions s ON s.analysis_id = a.id
+                LEFT JOIN snapshots snap ON snap.id = s.snapshot_id
+                WHERE ar.latest_analysis_id = a.id
+                  AND a.id = :analysis_id
+                """
+            ),
+            {"analysis_id": analysis_id, "now": now},
+        )
+
+    async def _mark_repository_index_failed(
+        self, connection: AsyncDbConnection, *, analysis_id: UUID, now: datetime
+    ) -> None:
+        await connection.execute(
+            text(
+                """
+                UPDATE analysis_repositories ar
+                SET latest_status = 'failed',
+                    last_analyzed_at = :now,
+                    updated_at = :now
+                FROM analyses a
+                WHERE ar.latest_analysis_id = a.id
+                  AND a.id = :analysis_id
+                """
+            ),
+            {"analysis_id": analysis_id, "now": now},
+        )
 
     async def add_memory_summary(self, **kwargs: Any) -> None:
         async with self._connection() as connection:

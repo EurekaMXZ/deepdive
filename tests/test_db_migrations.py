@@ -139,7 +139,13 @@ class DatabaseMigrationTest(unittest.TestCase):
             r"\s+\(snapshot_id,\s*path\)",
         )
         analyses_body = _create_table_body(sql, "analyses")
+        analysis_repositories_body = _create_table_body(sql, "analysis_repositories")
         self.assertRegex(analyses_body, r"\bcreated_by_user_id\s+uuid\b")
+        self.assertRegex(analysis_repositories_body, r"\brepository_label\s+text\s+not\s+null\b")
+        self.assertRegex(analysis_repositories_body, r"\bsearch_text\s+text\s+not\s+null\b")
+        self.assertRegex(analysis_repositories_body, r"\blatest_analysis_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(analysis_repositories_body, r"\banalysis_count\s+integer\s+not\s+null\b")
+        self.assertRegex(analysis_repositories_body, r"\bcompleted_analysis_count\s+integer\s+not\s+null\b")
         self.assertRegex(
             sql,
             r"create\s+unique\s+index\s+uq_users_tenant_email\s+on\s+users\s+\(tenant_id,\s*email\)",
@@ -228,6 +234,9 @@ class DatabaseMigrationTest(unittest.TestCase):
             "ix_analyses_tenant_created_by": "analyses",
             "ix_analyses_tenant_user_repository_url": "analyses",
             "ix_analyses_status_updated_at": "analyses",
+            "ix_analysis_repositories_scope_recent": "analysis_repositories",
+            "ix_analysis_repositories_label_trgm": "analysis_repositories",
+            "ix_analysis_repositories_text_trgm": "analysis_repositories",
             "ix_users_tenant_created_at": "users",
             "ix_refresh_tokens_user_expires_at": "refresh_tokens",
             "ix_audit_log_tenant_created_at": "audit_log",
@@ -254,6 +263,22 @@ class DatabaseMigrationTest(unittest.TestCase):
             sql,
             r"create\s+index\s+ix_analyses_tenant_user_repository_url\s+on\s+analyses"
             r"\s+\(tenant_id,\s*created_by_user_id,\s*repository_url\s+text_pattern_ops\)",
+        )
+        self.assertIn("create extension if not exists pg_trgm", sql)
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_analysis_repositories_scope_url\s+on\s+analysis_repositories"
+            r"\s+\(tenant_id,\s*created_by_user_id,\s*repository_url_hash\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+index\s+ix_analysis_repositories_label_trgm\s+on\s+analysis_repositories"
+            r"\s+using\s+gin\s+\(repository_label\s+gin_trgm_ops\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+index\s+ix_analysis_repositories_text_trgm\s+on\s+analysis_repositories"
+            r"\s+using\s+gin\s+\(search_text\s+gin_trgm_ops\)",
         )
 
 

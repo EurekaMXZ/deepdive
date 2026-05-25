@@ -190,6 +190,69 @@ class AnalysisApiTest(unittest.TestCase):
         self.assertEqual([item["analysis_id"] for item in body["items"]], [matching["analysis_id"]])
         self.assertEqual(body["items"][0]["repository_label"], "openai/codex")
 
+    def test_repository_search_returns_deduplicated_non_prefix_matches(self) -> None:
+        older = self.client.post(
+            "/analysis",
+            json={
+                "repository_url": "https://github.com/openai/codex.git",
+                "ref": "main",
+            },
+            headers=self.headers,
+        ).json()
+        latest = self.client.post(
+            "/analysis",
+            json={
+                "repository_url": "https://github.com/openai/codex.git",
+                "ref": "release",
+            },
+            headers=self.headers,
+        ).json()
+        self.client.post(
+            "/analysis",
+            json={
+                "repository_url": "https://github.com/vercel/next.js.git",
+                "ref": "main",
+            },
+            headers=self.headers,
+        )
+
+        response = self.client.get(
+            "/repositories/search",
+            params={"q": "codex", "limit": 8},
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body["items"]), 1)
+        self.assertEqual(body["items"][0]["repository_label"], "openai/codex")
+        self.assertEqual(body["items"][0]["repository_url"], "https://github.com/openai/codex.git")
+        self.assertEqual(body["items"][0]["latest_analysis_id"], latest["analysis_id"])
+        self.assertEqual(body["items"][0]["latest_requested_ref"], "release")
+        self.assertEqual(body["items"][0]["analysis_count"], 2)
+        self.assertEqual(body["items"][0]["completed_analysis_count"], 0)
+        self.assertNotEqual(body["items"][0]["latest_analysis_id"], older["analysis_id"])
+
+    def test_repository_search_is_scoped_to_current_user(self) -> None:
+        self.client.post(
+            "/analysis",
+            json={
+                "repository_url": "https://github.com/openai/codex.git",
+                "ref": "main",
+            },
+            headers=self.headers,
+        )
+        other_headers = self._auth_headers("other-analysis@example.com")
+
+        response = self.client.get(
+            "/repositories/search",
+            params={"q": "codex", "limit": 8},
+            headers=other_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"], [])
+
     def test_cancel_analysis_moves_status_to_cancelling(self) -> None:
         created = self.client.post(
             "/analysis",
@@ -215,14 +278,14 @@ class AnalysisApiTest(unittest.TestCase):
         self.assertEqual(body["error"]["code"], "ANALYSIS_NOT_FOUND")
         self.assertEqual(uuid.UUID(body["error"]["request_id"]).version, 7)
 
-    def _auth_headers(self) -> dict[str, str]:
+    def _auth_headers(self, email: str = "analysis@example.com") -> dict[str, str]:
         self.client.post(
             "/auth/register",
-            json={"email": "analysis@example.com", "password": "correct horse battery staple"},
+            json={"email": email, "password": "correct horse battery staple"},
         )
         tokens = self.client.post(
             "/auth/login",
-            json={"email": "analysis@example.com", "password": "correct horse battery staple"},
+            json={"email": email, "password": "correct horse battery staple"},
         ).json()
         return {"Authorization": f"Bearer {tokens['access_token']}"}
 

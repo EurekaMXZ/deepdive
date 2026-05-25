@@ -340,7 +340,37 @@ GET /analysis/{analysis_id}
 
 返回 analysis、snapshot、agent session、最新状态、错误信息和统计信息。
 
-### 7.4 取消分析任务
+### 7.4 搜索已分析仓库
+
+首页搜索框不直接扫描 `GET /analysis` 的完整结果，也不只做 URL 前缀匹配。后端维护 `analysis_repositories` 聚合索引表，以仓库为搜索实体，对同一用户在同一租户下重复分析的同一仓库做去重，并记录最新 analysis、最新状态、分析次数和最近分析时间。
+
+```text
+GET /repositories/search?q=openai%20codex&limit=8
+```
+
+返回：
+
+```json
+{
+  "items": [
+    {
+      "repository_label": "openai/codex",
+      "repository_url": "https://github.com/openai/codex.git",
+      "latest_analysis_id": "01972020-9630-737c-a507-348f44d7161e",
+      "latest_status": "completed",
+      "latest_requested_ref": "main",
+      "latest_resolved_commit_sha": "4f7a...",
+      "analysis_count": 3,
+      "completed_analysis_count": 2,
+      "last_analyzed_at": "2026-05-22T05:03:20Z"
+    }
+  ]
+}
+```
+
+Postgres 侧使用 `pg_trgm` 和 `analysis_repositories.search_text` 支持非前缀搜索、仓库名搜索和轻量模糊匹配；`tenant_id`、`created_by_user_id` 始终参与过滤，避免跨用户泄露已分析仓库。旧的 `GET /analysis/suggestions` 可继续作为兼容接口，但首页搜索应优先使用仓库级搜索接口。
+
+### 7.5 取消分析任务
 
 ```text
 POST /analysis/{analysis_id}/cancel
@@ -1467,7 +1497,7 @@ Git URL 或日志泄露 credential
 
 ## 24. MVP 范围
 
-当前阶段已将 Markdown document artifact 纳入 Agent 输出路径。Agent 可以通过 `document_create`、`document_update`、`document_get`、`document_finalize` 和 `document_delete` 创建、迭代、读取、定稿或删除分析文档；这些 artifact 归属于 analysis，并通过 document revision、content_ref 和 tool_call_id 保持可审计、可重放。`GET /analysis/{analysis_id}/events` 仍用于调试和实时观察 Agent 状态、工具调用、证据引用与最终输出摘要，但最终分析材料应优先沉淀为平台 document artifact，而不是只依赖 SSE 文本流。PDF、DOCX 等导出版式仍不属于 MVP；如后续需要，应单独设计 report/export worker，消费 finalized document artifact 或 `AnalysisCompleted` 后生成。
+当前阶段已将 Markdown document artifact 纳入 Agent 输出路径。Agent 可以通过 `document_folder_create`、`document_create`、`document_update`、`document_get`、`document_finalize` 和 `document_delete` 创建、迭代、读取、定稿或删除分析文档；这些 artifact 归属于 analysis，并通过 document revision、content_ref 和 tool_call_id 保持可审计、可重放。文档输出不是单一大报告，而是树形组织的多个 focused document：`document_nodes` 表示 folder/document 层级，`document_sections` 表示每个文档内稳定章节，`document_section_revisions` 保存章节级修订。Agent 应按后端、前端、部署等粗粒度 folder 拆分，再在 folder 下生成“认证与鉴权”“用户管理”等边界清晰的文档，每个文档只覆盖一个关注点并包含多个章节。`GET /analysis/{analysis_id}/documents/tree` 用于读取文档树，`GET /analysis/{analysis_id}/events` 仍用于调试和实时观察 Agent 状态、工具调用、证据引用与最终输出摘要。最终分析材料应优先沉淀为平台 document artifact，而不是只依赖 SSE 文本流。PDF、DOCX 等导出版式仍不属于 MVP；如后续需要，应单独设计 report/export worker，消费 finalized document artifact 或 `AnalysisCompleted` 后生成。
 
 当前阶段不实现 token 或成本预算系统。后端只保留 Responses API usage、上下文 token 估算、compact 触发阈值和自动 compact 能力；不做预算分配、预算告警、成本上限控制，也不基于预算调度任务。
 
@@ -1475,7 +1505,7 @@ MVP 包含：
 
 1. `backend/` Python 后端目录结构。
 2. 启动配置加载、校验和 `config_snapshots` 持久化。
-3. REST 风格 API：`POST /analysis`、`GET /analysis`、`GET /analysis/{analysis_id}`、`POST /analysis/{analysis_id}/cancel`、`GET /analysis/{analysis_id}/events`。
+3. REST 风格 API：`POST /analysis`、`GET /analysis`、`GET /analysis/{analysis_id}`、`POST /analysis/{analysis_id}/cancel`、`GET /analysis/{analysis_id}/events`、`GET /repositories/search`。
 4. Postgres 18 schema，所有平台 ID 使用 UUIDv7。
 5. Kafka event envelope、schema version、transactional outbox、processed_events 幂等。
 6. Snapshot worker 使用 git CLI。
@@ -1485,7 +1515,7 @@ MVP 包含：
 10. ripgrep prefix cache 和 read_file single file cache。
 11. AGENTS.md 扫描、作用域解析和上下文注入。
 12. SSE replay，基于 Postgres `agent_stream_events` 恢复输出流。
-13. Markdown document artifact 工具链：`document_create`、`document_get`、`document_update`、`document_delete`、`document_finalize`。
+13. Markdown document artifact 工具链：`document_folder_create`、`document_create`、`document_get`、`document_update`、`document_delete`、`document_finalize`，并支持 `GET /analysis/{analysis_id}/documents/tree` 读取树形文档结构和章节元数据。
 14. 基础日志、指标、错误状态和 DLQ。
 
 MVP 明确不包含：

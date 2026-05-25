@@ -29,6 +29,7 @@ class DatabaseSchemaTest(unittest.TestCase):
             "tool_calls",
             "evidence",
             "memory_summaries",
+            "analysis_repositories",
             "config_snapshots",
             "outbox_events",
             "processed_events",
@@ -92,6 +93,7 @@ class DatabaseSchemaTest(unittest.TestCase):
         role_permissions = metadata.tables["role_permissions"]
         user_roles = metadata.tables["user_roles"]
         oauth_accounts = metadata.tables["oauth_accounts"]
+        analysis_repositories = metadata.tables["analysis_repositories"]
 
         self.assertIn("created_by_user_id", metadata.tables["analyses"].c)
         self.assertIn(
@@ -129,6 +131,14 @@ class DatabaseSchemaTest(unittest.TestCase):
         self.assertIn(
             ("provider", "tenant_id", "provider_email"),
             {_columns(index) for index in oauth_accounts.indexes if index.unique},
+        )
+        self.assertIn(
+            ("tenant_id", "created_by_user_id", "repository_url_hash"),
+            {_columns(index) for index in analysis_repositories.indexes if index.unique},
+        )
+        self.assertIn(
+            ("tenant_id", "created_by_user_id", "last_analyzed_at"),
+            {_columns(index) for index in analysis_repositories.indexes},
         )
         self.assertIn(
             ("event_id", "consumer_name"),
@@ -328,6 +338,32 @@ class DatabaseSchemaTest(unittest.TestCase):
         ]:
             with self.subTest(table="document_section_revisions", column=column_name):
                 self.assertIn(column_name, section_revisions.c)
+
+    def test_analysis_repositories_have_expected_columns(self) -> None:
+        repositories = metadata.tables["analysis_repositories"]
+
+        for column_name in [
+            "tenant_id",
+            "created_by_user_id",
+            "repository_url",
+            "repository_url_hash",
+            "repository_host",
+            "repository_owner",
+            "repository_name",
+            "repository_label",
+            "search_text",
+            "latest_analysis_id",
+            "latest_status",
+            "latest_requested_ref",
+            "latest_resolved_commit_sha",
+            "analysis_count",
+            "completed_analysis_count",
+            "last_analyzed_at",
+            "created_at",
+            "updated_at",
+        ]:
+            with self.subTest(table="analysis_repositories", column=column_name):
+                self.assertIn(column_name, repositories.c)
 
     def test_agent_session_uses_limits_not_budget_naming(self) -> None:
         columns = metadata.tables["agent_sessions"].c

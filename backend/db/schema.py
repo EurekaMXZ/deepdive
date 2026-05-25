@@ -82,6 +82,46 @@ Index("uq_users_tenant_email", users.c.tenant_id, users.c.email, unique=True)
 Index("ix_users_tenant_created_at", users.c.tenant_id, users.c.created_at)
 
 
+analysis_repositories = Table(
+    "analysis_repositories",
+    metadata,
+    uuid_pk(),
+    Column("tenant_id", UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False),
+    Column("created_by_user_id", UUID(as_uuid=True), ForeignKey("users.id"), nullable=False),
+    Column("repository_url", Text, nullable=False),
+    Column("repository_url_hash", Text, nullable=False),
+    Column("repository_host", Text, nullable=False),
+    Column("repository_owner", Text),
+    Column("repository_name", Text),
+    Column("repository_label", Text, nullable=False),
+    Column("search_text", Text, nullable=False),
+    Column("latest_analysis_id", UUID(as_uuid=True), ForeignKey("analyses.id"), nullable=False),
+    Column("latest_status", Text, nullable=False),
+    Column("latest_requested_ref", Text, nullable=False),
+    Column("latest_resolved_commit_sha", Text),
+    Column("analysis_count", Integer, nullable=False),
+    Column("completed_analysis_count", Integer, nullable=False),
+    Column("last_analyzed_at", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index(
+    "uq_analysis_repositories_scope_url",
+    analysis_repositories.c.tenant_id,
+    analysis_repositories.c.created_by_user_id,
+    analysis_repositories.c.repository_url_hash,
+    unique=True,
+)
+Index(
+    "ix_analysis_repositories_scope_recent",
+    analysis_repositories.c.tenant_id,
+    analysis_repositories.c.created_by_user_id,
+    analysis_repositories.c.last_analyzed_at,
+)
+Index("ix_analysis_repositories_label_trgm", analysis_repositories.c.repository_label)
+Index("ix_analysis_repositories_text_trgm", analysis_repositories.c.search_text)
+
+
 user_credentials = Table(
     "user_credentials",
     metadata,

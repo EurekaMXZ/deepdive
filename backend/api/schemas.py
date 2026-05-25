@@ -75,6 +75,22 @@ class AnalysisSuggestionListResponse(BaseModel):
     items: list[AnalysisSuggestionResponse]
 
 
+class RepositorySearchResponse(BaseModel):
+    repository_label: str
+    repository_url: str
+    latest_analysis_id: UUID
+    latest_status: str
+    latest_requested_ref: str
+    latest_resolved_commit_sha: str | None
+    analysis_count: int
+    completed_analysis_count: int
+    last_analyzed_at: datetime
+
+
+class RepositorySearchListResponse(BaseModel):
+    items: list[RepositorySearchResponse]
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str

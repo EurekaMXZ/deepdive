@@ -3,6 +3,8 @@
 
 BEGIN;
 
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE TABLE config_snapshots (
     id uuid primary key default uuidv7(),
     config_version text not null,
@@ -50,6 +52,28 @@ CREATE TABLE user_credentials (
     id uuid primary key default uuidv7(),
     user_id uuid not null references users(id),
     password_hash text not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+);
+
+CREATE TABLE analysis_repositories (
+    id uuid primary key default uuidv7(),
+    tenant_id uuid not null references tenants(id),
+    created_by_user_id uuid not null references users(id),
+    repository_url text not null,
+    repository_url_hash text not null,
+    repository_host text not null,
+    repository_owner text,
+    repository_name text,
+    repository_label text not null,
+    search_text text not null,
+    latest_analysis_id uuid not null references analyses(id),
+    latest_status text not null,
+    latest_requested_ref text not null,
+    latest_resolved_commit_sha text,
+    analysis_count integer not null,
+    completed_analysis_count integer not null,
+    last_analyzed_at timestamptz not null,
     created_at timestamptz not null,
     updated_at timestamptz not null
 );
@@ -433,6 +457,18 @@ CREATE UNIQUE INDEX uq_users_tenant_email
 
 CREATE INDEX ix_users_tenant_created_at
     ON users (tenant_id, created_at);
+
+CREATE UNIQUE INDEX uq_analysis_repositories_scope_url
+    ON analysis_repositories (tenant_id, created_by_user_id, repository_url_hash);
+
+CREATE INDEX ix_analysis_repositories_scope_recent
+    ON analysis_repositories (tenant_id, created_by_user_id, last_analyzed_at);
+
+CREATE INDEX ix_analysis_repositories_label_trgm
+    ON analysis_repositories USING gin (repository_label gin_trgm_ops);
+
+CREATE INDEX ix_analysis_repositories_text_trgm
+    ON analysis_repositories USING gin (search_text gin_trgm_ops);
 
 CREATE UNIQUE INDEX uq_user_credentials_user_id
     ON user_credentials (user_id);

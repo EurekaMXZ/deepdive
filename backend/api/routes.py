@@ -19,8 +19,10 @@ from backend.api.schemas import (
     AnalysisSuggestionListResponse,
     AnalysisSuggestionResponse,
     ErrorResponse,
+    RepositorySearchListResponse,
+    RepositorySearchResponse,
 )
-from backend.api.services import AnalysisRecord, encode_list_cursor, maybe_await
+from backend.api.services import AnalysisRecord, RepositorySearchRecord, encode_list_cursor, maybe_await
 from backend.api.sse import (
     StreamEvent,
     event_seq,
@@ -67,6 +69,15 @@ class AnalysisService(Protocol):
         tenant_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
     ) -> list[AnalysisRecord]: ...
+
+    def search_repositories(
+        self,
+        *,
+        query: str,
+        limit: int = 8,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> list[RepositorySearchRecord]: ...
 
     def get(
         self,
@@ -186,6 +197,31 @@ async def suggest_analysis(
     return AnalysisSuggestionListResponse(items=[_to_suggestion(record) for record in records])
 
 
+@router.get("/repositories/search", response_model=RepositorySearchListResponse)
+async def search_repositories(
+    service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    current_user: Annotated[CurrentUser, Depends(require_permission("analysis:read"))],
+    query: Annotated[str | None, Query(alias="q", min_length=1)] = None,
+    repository_query: Annotated[str | None, Query(min_length=1)] = None,
+    limit: Annotated[int, Query(ge=1, le=10)] = 8,
+) -> RepositorySearchListResponse:
+    effective_query = query if query is not None else repository_query
+    if effective_query is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": {"code": "INVALID_QUERY", "message": "q is required.", "request_id": str(new_uuid7())}},
+        )
+    records = await maybe_await(
+        service.search_repositories(
+            query=effective_query,
+            limit=limit,
+            tenant_id=current_user.tenant_id,
+            created_by_user_id=current_user.id,
+        )
+    )
+    return RepositorySearchListResponse(items=[_to_repository_search_response(record) for record in records])
+
+
 @router.get(
     "/analysis/{analysis_id}",
     response_model=AnalysisResponse,
@@ -293,6 +329,20 @@ def _to_suggestion(record: AnalysisRecord) -> AnalysisSuggestionResponse:
         requested_ref=record.requested_ref,
         resolved_commit_sha=record.resolved_commit_sha,
         updated_at=record.updated_at,
+    )
+
+
+def _to_repository_search_response(record: RepositorySearchRecord) -> RepositorySearchResponse:
+    return RepositorySearchResponse(
+        repository_label=record.repository_label,
+        repository_url=record.repository_url,
+        latest_analysis_id=record.latest_analysis_id,
+        latest_status=record.latest_status,
+        latest_requested_ref=record.latest_requested_ref,
+        latest_resolved_commit_sha=record.latest_resolved_commit_sha,
+        analysis_count=record.analysis_count,
+        completed_analysis_count=record.completed_analysis_count,
+        last_analyzed_at=record.last_analyzed_at,
     )
 
 
