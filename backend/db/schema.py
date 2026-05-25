@@ -45,6 +45,13 @@ analyses = Table(
 )
 Index("ix_analyses_tenant_created_at", analyses.c.tenant_id, analyses.c.created_at)
 Index("ix_analyses_tenant_created_by", analyses.c.tenant_id, analyses.c.created_by_user_id)
+Index(
+    "ix_analyses_tenant_user_repository_url",
+    analyses.c.tenant_id,
+    analyses.c.created_by_user_id,
+    analyses.c.repository_url,
+    postgresql_ops={"repository_url": "text_pattern_ops"},
+)
 Index("ix_analyses_status_updated_at", analyses.c.status, analyses.c.updated_at)
 
 

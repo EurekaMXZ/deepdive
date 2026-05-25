@@ -72,7 +72,9 @@ class FakeRedisClient:
 
 class AuthApiTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.client = TestClient(create_app())
+        app = create_app()
+        app.state.turnstile_config = TurnstileConfig(enabled=False)
+        self.client = TestClient(app)
 
     def test_register_login_me_and_refresh_token_flow(self) -> None:
         created = self.client.post(
@@ -298,6 +300,7 @@ class AuthApiTest(unittest.TestCase):
 
     def test_password_login_for_oauth_only_user_is_rejected(self) -> None:
         app = create_app()
+        app.state.turnstile_config = TurnstileConfig(enabled=False)
         app.state.github_oauth_config = GitHubOAuthConfig(
             enabled=True,
             client_id="github-client-id",
@@ -356,6 +359,33 @@ class AuthApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["error"]["code"], "INVALID_TOKEN")
+
+    def test_user_list_is_paginated(self) -> None:
+        admin_tokens = self._register_and_login("admin@example.com")
+        headers = {"Authorization": f"Bearer {admin_tokens['access_token']}"}
+        self.client.post(
+            "/users",
+            json={"email": "first@example.com", "password": "correct horse battery staple"},
+            headers=headers,
+        )
+        self.client.post(
+            "/users",
+            json={"email": "second@example.com", "password": "correct horse battery staple"},
+            headers=headers,
+        )
+
+        page_one = self.client.get("/users", params={"limit": 1}, headers=headers)
+        page_two = self.client.get(
+            "/users",
+            params={"limit": 1, "cursor": page_one.json()["next_cursor"]},
+            headers=headers,
+        )
+
+        self.assertEqual(page_one.status_code, 200)
+        self.assertEqual(page_two.status_code, 200)
+        self.assertEqual(len(page_one.json()["items"]), 1)
+        self.assertEqual(len(page_two.json()["items"]), 1)
+        self.assertIsNotNone(page_one.json()["next_cursor"])
 
     def _register_and_login(self, email: str) -> dict[str, object]:
         self.client.post("/auth/register", json={"email": email, "password": "correct horse battery staple"})

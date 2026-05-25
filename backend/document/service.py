@@ -77,16 +77,18 @@ class DocumentService:
             result["content"] = self._storage.get_bytes(document["content_ref"]).decode("utf-8")
         return result
 
-    async def list(self, *, analysis_id: UUID) -> list[dict[str, Any]]:
+    async def list(self, *, analysis_id: UUID, limit: int = 50, cursor: str | None = None) -> list[dict[str, Any]]:
         analysis_id = coerce_uuid(analysis_id)
-        documents = await self._repository.list_documents(analysis_id)
+        documents = await self._repository.list_documents(analysis_id, limit=limit, cursor=cursor)
         return [document_result(document) for document in documents]
 
-    async def list_revisions(self, *, analysis_id: UUID, document_id: UUID) -> list[dict[str, Any]]:
+    async def list_revisions(
+        self, *, analysis_id: UUID, document_id: UUID, limit: int = 50, cursor: str | None = None
+    ) -> list[dict[str, Any]]:
         analysis_id = coerce_uuid(analysis_id)
         document_id = coerce_uuid(document_id)
         document = await self._document_for_analysis(analysis_id, document_id)
-        revisions = await self._repository.list_revisions(UUID(str(document["id"])))
+        revisions = await self._repository.list_revisions(UUID(str(document["id"])), limit=limit, cursor=cursor)
         return [revision_result(revision) for revision in revisions]
 
     async def update(

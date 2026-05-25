@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
+from backend.api.pagination import cursor_offset
 from backend.db.connections import AsyncDbConnection, ConnectionSource, connection_from
 from backend.ids import new_uuid7
 
@@ -34,7 +35,10 @@ class PostgresDocumentRepository:
         row = result.mappings().first()
         return dict(row) if row is not None else None
 
-    async def list_documents(self, analysis_id: UUID) -> list[dict[str, Any]]:
+    async def list_documents(
+        self, analysis_id: UUID, *, limit: int = 50, cursor: str | None = None
+    ) -> list[dict[str, Any]]:
+        offset = cursor_offset(cursor)
         async with self._connection() as connection:
             result = await connection.execute(
                 text(
@@ -45,13 +49,17 @@ class PostgresDocumentRepository:
                     WHERE analysis_id = :analysis_id
                       AND status <> 'deleted'
                     ORDER BY created_at, id
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {"analysis_id": analysis_id},
+                {"analysis_id": analysis_id, "limit": limit, "offset": offset},
             )
         return [dict(row) for row in result.mappings().all()]
 
-    async def list_revisions(self, document_id: UUID) -> list[dict[str, Any]]:
+    async def list_revisions(
+        self, document_id: UUID, *, limit: int = 50, cursor: str | None = None
+    ) -> list[dict[str, Any]]:
+        offset = cursor_offset(cursor)
         async with self._connection() as connection:
             result = await connection.execute(
                 text(
@@ -61,9 +69,10 @@ class PostgresDocumentRepository:
                     FROM document_revisions
                     WHERE document_id = :document_id
                     ORDER BY version
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {"document_id": document_id},
+                {"document_id": document_id, "limit": limit, "offset": offset},
             )
         return [dict(row) for row in result.mappings().all()]
 

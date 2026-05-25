@@ -83,9 +83,9 @@ class PostgresAuthService:
             raise AuthError("INVALID_TOKEN", "Access token is invalid.")
         return current_user_from_record(user)
 
-    async def list_users(self) -> list[UserRecord]:
+    async def list_users(self, *, limit: int = 50, cursor: str | None = None) -> list[UserRecord]:
         await self._repository.ensure_seed_data()
-        return await self._repository.list_users()
+        return await self._repository.list_users(limit=limit, cursor=cursor)
 
     async def get_user(self, user_id: UUID) -> UserRecord | None:
         await self._repository.ensure_seed_data()

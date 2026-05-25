@@ -351,6 +351,9 @@ CREATE INDEX ix_analyses_tenant_created_at
 CREATE INDEX ix_analyses_tenant_created_by
     ON analyses (tenant_id, created_by_user_id);
 
+CREATE INDEX ix_analyses_tenant_user_repository_url
+    ON analyses (tenant_id, created_by_user_id, repository_url text_pattern_ops);
+
 CREATE INDEX ix_analyses_status_updated_at
     ON analyses (status, updated_at);
 

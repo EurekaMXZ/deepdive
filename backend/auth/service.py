@@ -5,6 +5,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from backend.api.pagination import cursor_offset
 from backend.auth.jwt import JwtError, decode_jwt, encode_jwt
 from backend.auth.models import CurrentUser, ExternalIdentityRecord, PermissionRecord, RoleRecord, TokenPair, UserRecord
 from backend.auth.passwords import hash_password, verify_password
@@ -136,8 +137,10 @@ class InMemoryAuthService:
             raise AuthError("INVALID_TOKEN", "Access token is invalid.")
         return current_user_from_record(user)
 
-    def list_users(self) -> list[UserRecord]:
-        return sorted(self._users.values(), key=lambda user: user.created_at)
+    def list_users(self, *, limit: int = 50, cursor: str | None = None) -> list[UserRecord]:
+        users = sorted(self._users.values(), key=lambda user: (user.created_at, user.id))
+        offset = cursor_offset(cursor)
+        return users[offset : offset + limit]
 
     def get_user(self, user_id: UUID) -> UserRecord | None:
         return self._users.get(user_id)

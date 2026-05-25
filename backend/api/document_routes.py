@@ -4,10 +4,11 @@ from datetime import datetime
 from typing import Annotated, Any, Protocol
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from backend.api.auth_dependencies import require_permission
+from backend.api.pagination import cursor_offset
 from backend.api.routes import AnalysisService, get_analysis_service
 from backend.api.services import maybe_await
 from backend.auth import CurrentUser
@@ -16,11 +17,13 @@ from backend.ids import new_uuid7
 
 
 class DocumentQueryService(Protocol):
-    async def list(self, *, analysis_id: UUID) -> list[dict[str, Any]]: ...
+    async def list(self, *, analysis_id: UUID, limit: int = 50, cursor: str | None = None) -> list[dict[str, Any]]: ...
 
     async def get(self, *, analysis_id: UUID, document_id: UUID, include_content: bool) -> dict[str, Any]: ...
 
-    async def list_revisions(self, *, analysis_id: UUID, document_id: UUID) -> list[dict[str, Any]]: ...
+    async def list_revisions(
+        self, *, analysis_id: UUID, document_id: UUID, limit: int = 50, cursor: str | None = None
+    ) -> list[dict[str, Any]]: ...
 
 
 class DocumentResponse(BaseModel):
@@ -38,6 +41,7 @@ class DocumentResponse(BaseModel):
 
 class DocumentListResponse(BaseModel):
     items: list[DocumentResponse]
+    next_cursor: str | None = None
 
 
 class DocumentContentResponse(DocumentResponse):
@@ -58,6 +62,7 @@ class DocumentRevisionResponse(BaseModel):
 
 class DocumentRevisionListResponse(BaseModel):
     items: list[DocumentRevisionResponse]
+    next_cursor: str | None = None
 
 
 router = APIRouter(tags=["documents"])
@@ -73,10 +78,15 @@ async def list_analysis_documents(
     analysis_service: Annotated[AnalysisService, Depends(get_analysis_service)],
     document_service: Annotated[DocumentQueryService, Depends(get_document_service)],
     current_user: Annotated[CurrentUser, Depends(require_permission("documents:read"))],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query()] = None,
 ) -> DocumentListResponse:
     await _ensure_analysis_readable(analysis_service, analysis_id, current_user)
-    documents = await document_service.list(analysis_id=analysis_id)
-    return DocumentListResponse(items=[DocumentResponse(**document) for document in documents])
+    offset = cursor_offset(cursor)
+    documents = await document_service.list(analysis_id=analysis_id, limit=limit + 1, cursor=cursor)
+    page = documents[:limit]
+    next_cursor = str(offset + limit) if len(documents) > limit else None
+    return DocumentListResponse(items=[DocumentResponse(**document) for document in page], next_cursor=next_cursor)
 
 
 @router.get("/analysis/{analysis_id}/documents/{document_id}", response_model=DocumentResponse)
@@ -116,13 +126,22 @@ async def list_analysis_document_revisions(
     analysis_service: Annotated[AnalysisService, Depends(get_analysis_service)],
     document_service: Annotated[DocumentQueryService, Depends(get_document_service)],
     current_user: Annotated[CurrentUser, Depends(require_permission("documents:read"))],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query()] = None,
 ) -> DocumentRevisionListResponse:
     await _ensure_analysis_readable(analysis_service, analysis_id, current_user)
     try:
-        revisions = await document_service.list_revisions(analysis_id=analysis_id, document_id=document_id)
+        offset = cursor_offset(cursor)
+        revisions = await document_service.list_revisions(
+            analysis_id=analysis_id, document_id=document_id, limit=limit + 1, cursor=cursor
+        )
     except DocumentToolError as exc:
         raise _document_exception(exc.code, exc.message, status.HTTP_404_NOT_FOUND) from exc
-    return DocumentRevisionListResponse(items=[DocumentRevisionResponse(**revision) for revision in revisions])
+    page = revisions[:limit]
+    next_cursor = str(offset + limit) if len(revisions) > limit else None
+    return DocumentRevisionListResponse(
+        items=[DocumentRevisionResponse(**revision) for revision in page], next_cursor=next_cursor
+    )
 
 
 async def _ensure_analysis_readable(

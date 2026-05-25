@@ -180,6 +180,7 @@ class DatabaseMigrationTest(unittest.TestCase):
         required_indexes = {
             "ix_analyses_tenant_created_at": "analyses",
             "ix_analyses_tenant_created_by": "analyses",
+            "ix_analyses_tenant_user_repository_url": "analyses",
             "ix_analyses_status_updated_at": "analyses",
             "ix_users_tenant_created_at": "users",
             "ix_refresh_tokens_user_expires_at": "refresh_tokens",
@@ -200,6 +201,11 @@ class DatabaseMigrationTest(unittest.TestCase):
         for index_name, table_name in required_indexes.items():
             with self.subTest(index=index_name):
                 self.assertRegex(sql, rf"\bcreate\s+index\s+{index_name}\s+on\s+{table_name}\b")
+        self.assertRegex(
+            sql,
+            r"create\s+index\s+ix_analyses_tenant_user_repository_url\s+on\s+analyses"
+            r"\s+\(tenant_id,\s*created_by_user_id,\s*repository_url\s+text_pattern_ops\)",
+        )
 
 
 def _migration_sql() -> str:

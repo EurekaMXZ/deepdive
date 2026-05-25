@@ -86,6 +86,10 @@ class DatabaseSchemaTest(unittest.TestCase):
 
         self.assertIn("created_by_user_id", metadata.tables["analyses"].c)
         self.assertIn(
+            ("tenant_id", "created_by_user_id", "repository_url"),
+            {_columns(index) for index in metadata.tables["analyses"].indexes},
+        )
+        self.assertIn(
             ("tenant_id", "email"),
             {_columns(index) for index in users.indexes if index.unique},
         )

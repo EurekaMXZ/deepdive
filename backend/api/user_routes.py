@@ -3,11 +3,12 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field, field_validator
 
 from backend.api.auth_dependencies import AuthService, auth_exception, get_auth_service, require_permission
 from backend.api.auth_schemas import RoleResponse, UserResponse, normalize_email
+from backend.api.pagination import cursor_offset
 from backend.api.services import maybe_await
 from backend.auth import AuthError, CurrentUser
 
@@ -33,6 +34,7 @@ class UserUpdateRequest(BaseModel):
 
 class UserListResponse(BaseModel):
     items: list[UserResponse]
+    next_cursor: str | None = None
 
 
 class UserRolesUpdateRequest(BaseModel):
@@ -47,9 +49,16 @@ class UserRolesResponse(BaseModel):
 async def list_users(
     _: Annotated[CurrentUser, Depends(require_permission("users:read"))],
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query()] = None,
 ) -> UserListResponse:
+    offset = cursor_offset(cursor)
+    users = await maybe_await(auth_service.list_users(limit=limit + 1, cursor=cursor))
+    page = users[:limit]
+    next_cursor = str(offset + limit) if len(users) > limit else None
     return UserListResponse(
-        items=[UserResponse.from_record(user) for user in await maybe_await(auth_service.list_users())]
+        items=[UserResponse.from_record(user) for user in page],
+        next_cursor=next_cursor,
     )
 
 

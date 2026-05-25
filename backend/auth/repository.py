@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from backend.api.pagination import cursor_offset
 from backend.auth.models import PermissionRecord, RoleRecord, UserRecord
 from backend.auth.passwords import hash_password
 from backend.auth.service import DEFAULT_TENANT_ID, PERMISSION_DESCRIPTIONS, ROLE_PERMISSIONS
@@ -317,7 +318,48 @@ class PostgresAuthRepository:
                 },
             )
 
-    async def list_users(self) -> list[UserRecord]:
+    async def list_users(self, *, limit: int = 50, cursor: str | None = None) -> list[UserRecord]:
+        offset = cursor_offset(cursor)
+        async with self._connection() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    WITH page AS (
+                        SELECT id, tenant_id, email, display_name, is_active, created_at, updated_at
+                        FROM users
+                        WHERE tenant_id = :tenant_id
+                        ORDER BY created_at, id
+                        LIMIT :limit OFFSET :offset
+                    )
+                    SELECT
+                        page.id AS user_id,
+                        page.tenant_id AS tenant_id,
+                        page.email AS email,
+                        page.display_name AS display_name,
+                        page.is_active AS is_active,
+                        page.created_at AS created_at,
+                        page.updated_at AS updated_at,
+                        r.id AS role_id,
+                        r.name AS role_name,
+                        r.description AS role_description,
+                        p.id AS permission_id,
+                        p.name AS permission_name,
+                        p.description AS permission_description
+                    FROM page
+                    LEFT JOIN user_roles ur ON ur.user_id = page.id
+                    LEFT JOIN roles r ON r.id = ur.role_id
+                    LEFT JOIN role_permissions rp ON rp.role_id = r.id
+                    LEFT JOIN permissions p ON p.id = rp.permission_id
+                    ORDER BY page.created_at, page.id, r.name, p.name
+                    """
+                ),
+                {"tenant_id": DEFAULT_TENANT_ID, "limit": limit, "offset": offset},
+            )
+            rows = result.mappings().all()
+        return _users_from_join_rows(rows)
+
+    async def list_user_ids(self, *, limit: int = 50, cursor: str | None = None) -> list[UUID]:
+        offset = cursor_offset(cursor)
         async with self._connection() as connection:
             result = await connection.execute(
                 text(
@@ -326,13 +368,12 @@ class PostgresAuthRepository:
                     FROM users
                     WHERE tenant_id = :tenant_id
                     ORDER BY created_at, id
+                    LIMIT :limit OFFSET :offset
                     """
                 ),
-                {"tenant_id": DEFAULT_TENANT_ID},
+                {"tenant_id": DEFAULT_TENANT_ID, "limit": limit, "offset": offset},
             )
-            user_ids = [cast(UUID, row["id"]) for row in result.mappings().all()]
-        users = [await self.get_user(user_id) for user_id in user_ids]
-        return [user for user in users if user is not None]
+        return [cast(UUID, row["id"]) for row in result.mappings().all()]
 
     async def get_user(self, user_id: UUID) -> UserRecord | None:
         async with self._connection() as connection:
@@ -539,6 +580,59 @@ def _user_from_row(row: Mapping[str, Any], roles: list[RoleRecord]) -> UserRecor
         updated_at=cast(datetime, row["updated_at"]),
         roles=roles,
     )
+
+
+def _users_from_join_rows(rows: Sequence[Mapping[str, Any]]) -> list[UserRecord]:
+    users: dict[UUID, dict[str, Any]] = {}
+    roles_by_user: dict[UUID, dict[UUID, RoleRecord]] = {}
+    permissions_by_role: dict[tuple[UUID, UUID], set[UUID]] = {}
+
+    for row in rows:
+        user_id = cast(UUID, row["user_id"])
+        users.setdefault(
+            user_id,
+            {
+                "id": user_id,
+                "tenant_id": row["tenant_id"],
+                "email": row["email"],
+                "display_name": row["display_name"],
+                "is_active": row["is_active"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            },
+        )
+        role_id = cast(UUID | None, row["role_id"])
+        if role_id is None:
+            continue
+        role_permissions = roles_by_user.setdefault(user_id, {})
+        role = role_permissions.get(role_id)
+        if role is None:
+            role = RoleRecord(
+                id=role_id,
+                name=str(row["role_name"]),
+                description=str(row["role_description"]),
+                permissions=[],
+            )
+            role_permissions[role_id] = role
+        permission_id = cast(UUID | None, row["permission_id"])
+        if permission_id is None:
+            continue
+        permission_key = (user_id, role_id)
+        seen_permission_ids = permissions_by_role.setdefault(permission_key, set())
+        if permission_id in seen_permission_ids:
+            continue
+        seen_permission_ids.add(permission_id)
+        role.permissions.append(
+            PermissionRecord(
+                id=permission_id,
+                name=str(row["permission_name"]),
+                description=str(row["permission_description"]),
+            )
+        )
+
+    return [
+        _user_from_row(user_row, list(roles_by_user.get(user_id, {}).values())) for user_id, user_row in users.items()
+    ]
 
 
 def _role_from_row(row: Mapping[str, Any], permissions: list[PermissionRecord]) -> RoleRecord:

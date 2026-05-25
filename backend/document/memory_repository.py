@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
+from backend.api.pagination import cursor_offset
 from backend.document.models import coerce_uuid
 
 
@@ -16,17 +17,23 @@ class DocumentRepository:
         document = self.documents.get(document_id)
         return dict(document) if document is not None else None
 
-    async def list_documents(self, analysis_id: UUID) -> list[dict[str, Any]]:
+    async def list_documents(
+        self, analysis_id: UUID, *, limit: int = 50, cursor: str | None = None
+    ) -> list[dict[str, Any]]:
+        offset = cursor_offset(cursor)
         documents = [
             dict(document)
             for document in self.documents.values()
             if coerce_uuid(document["analysis_id"]) == analysis_id and document["status"] != "deleted"
         ]
-        return sorted(documents, key=lambda document: (document["created_at"], document["id"]))
+        return sorted(documents, key=lambda document: (document["created_at"], document["id"]))[offset : offset + limit]
 
-    async def list_revisions(self, document_id: UUID) -> list[dict[str, Any]]:
+    async def list_revisions(
+        self, document_id: UUID, *, limit: int = 50, cursor: str | None = None
+    ) -> list[dict[str, Any]]:
+        offset = cursor_offset(cursor)
         revisions = [dict(revision) for revision in self.revisions if revision["document_id"] == document_id]
-        return sorted(revisions, key=lambda revision: int(revision["version"]))
+        return sorted(revisions, key=lambda revision: int(revision["version"]))[offset : offset + limit]
 
     async def find_revision_by_tool_call(self, tool_call_id: UUID) -> dict[str, Any] | None:
         for revision in self.revisions:

@@ -64,6 +64,22 @@ class PostgresDocumentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("returning id, analysis_id, agent_id", executed_sql)
         self.assertEqual(connection.execute_count("select id, analysis_id"), 0)
 
+    async def test_list_documents_and_revisions_apply_database_limits(self) -> None:
+        connection = FakeConnection(rows=[])
+        repository = PostgresDocumentRepository(connection)
+        analysis_id = new_uuid7()
+        document_id = new_uuid7()
+
+        await repository.list_documents(analysis_id, limit=25)
+        await repository.list_revisions(document_id, limit=30)
+
+        documents_statement, documents_params = connection.executed[0]
+        revisions_statement, revisions_params = connection.executed[1]
+        self.assertIn("limit :limit", str(documents_statement).lower())
+        self.assertIn("limit :limit", str(revisions_statement).lower())
+        self.assertEqual(documents_params["limit"], 25)
+        self.assertEqual(revisions_params["limit"], 30)
+
 
 class FakeConnection:
     def __init__(self, *, rows: list[dict]) -> None:
@@ -86,6 +102,9 @@ class FakeResult:
 
     def mappings(self) -> FakeResult:
         return self
+
+    def all(self) -> list[dict]:
+        return self._rows
 
     def first(self) -> dict | None:
         return self._rows[0] if self._rows else None
