@@ -66,7 +66,16 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "document_create": ToolDefinition(
         "document_create",
-        "Create a markdown analysis document artifact.",
+        "Create one focused markdown analysis document artifact, optionally under a document tree folder.",
+        ToolCapability.ARTIFACT_WRITE,
+        read_only=False,
+        idempotent=False,
+        requires_analysis_id=True,
+        parallel_safe=False,
+    ),
+    "document_folder_create": ToolDefinition(
+        "document_folder_create",
+        "Create a folder node in the analysis document tree.",
         ToolCapability.ARTIFACT_WRITE,
         read_only=False,
         idempotent=False,
@@ -207,9 +216,38 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "title": {"type": "string", "minLength": 1, "maxLength": 200},
             "kind": {"type": "string", "enum": ["markdown"]},
-            "content": {"type": "string"},
+            "parent_node_id": {"type": ["string", "null"]},
+            "slug": {"type": ["string", "null"], "minLength": 1, "maxLength": 96},
+            "focus_area": {"type": ["string", "null"], "maxLength": 300},
+            "sections": {
+                "type": ["array", "null"],
+                "maxItems": 20,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "stable_id": {"type": "string", "minLength": 1, "maxLength": 96},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "content": {"type": "string"},
+                        "sort_order": {"type": "integer"},
+                    },
+                    "required": ["stable_id", "title", "content", "sort_order"],
+                    "additionalProperties": False,
+                },
+            },
+            "content": {"type": ["string", "null"]},
         },
-        "required": ["title", "kind", "content"],
+        "required": ["title", "kind", "parent_node_id", "slug", "focus_area", "sections", "content"],
+        "additionalProperties": False,
+    },
+    "document_folder_create": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "minLength": 1, "maxLength": 200},
+            "slug": {"type": "string", "minLength": 1, "maxLength": 96},
+            "parent_node_id": {"type": ["string", "null"]},
+            "sort_order": {"type": "integer"},
+        },
+        "required": ["title", "slug", "parent_node_id", "sort_order"],
         "additionalProperties": False,
     },
     "todo_update": {
@@ -245,8 +283,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "document_id": {"type": "string"},
             "include_content": {"type": "boolean"},
+            "include_sections": {"type": "boolean"},
         },
-        "required": ["document_id", "include_content"],
+        "required": ["document_id", "include_content", "include_sections"],
         "additionalProperties": False,
     },
     "document_update": {
@@ -254,9 +293,24 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "document_id": {"type": "string"},
             "expected_version": {"type": "integer", "minimum": 1},
-            "content": {"type": "string"},
+            "sections": {
+                "type": ["array", "null"],
+                "maxItems": 20,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "stable_id": {"type": "string", "minLength": 1, "maxLength": 96},
+                        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "content": {"type": "string"},
+                        "sort_order": {"type": "integer"},
+                    },
+                    "required": ["stable_id", "title", "content", "sort_order"],
+                    "additionalProperties": False,
+                },
+            },
+            "content": {"type": ["string", "null"]},
         },
-        "required": ["document_id", "expected_version", "content"],
+        "required": ["document_id", "expected_version", "sections", "content"],
         "additionalProperties": False,
     },
     "document_delete": {

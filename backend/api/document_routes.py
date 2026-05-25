@@ -21,6 +21,8 @@ class DocumentQueryService(Protocol):
 
     async def get(self, *, analysis_id: UUID, document_id: UUID, include_content: bool) -> dict[str, Any]: ...
 
+    async def tree(self, *, analysis_id: UUID) -> list[dict[str, Any]]: ...
+
     async def list_revisions(
         self, *, analysis_id: UUID, document_id: UUID, limit: int = 50, cursor: str | None = None
     ) -> list[dict[str, Any]]: ...
@@ -37,11 +39,33 @@ class DocumentResponse(BaseModel):
     content_ref: str
     content_hash: str
     size_bytes: int
+    focus_area: str | None = None
+    node: dict[str, Any] | None = None
+    sections: list[dict[str, Any]] | None = None
 
 
 class DocumentListResponse(BaseModel):
     items: list[DocumentResponse]
     next_cursor: str | None = None
+
+
+class DocumentTreeNodeResponse(BaseModel):
+    node_id: UUID
+    node_type: str
+    document_id: UUID | None = None
+    title: str
+    slug: str
+    path: str
+    focus_area: str | None = None
+    sort_order: int
+    status: str | None = None
+    version: int | None = None
+    section_count: int
+    children: list[DocumentTreeNodeResponse]
+
+
+class DocumentTreeResponse(BaseModel):
+    items: list[DocumentTreeNodeResponse]
 
 
 class DocumentContentResponse(DocumentResponse):
@@ -87,6 +111,18 @@ async def list_analysis_documents(
     page = documents[:limit]
     next_cursor = str(offset + limit) if len(documents) > limit else None
     return DocumentListResponse(items=[DocumentResponse(**document) for document in page], next_cursor=next_cursor)
+
+
+@router.get("/analysis/{analysis_id}/documents/tree", response_model=DocumentTreeResponse)
+async def get_analysis_documents_tree(
+    analysis_id: UUID,
+    analysis_service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    document_service: Annotated[DocumentQueryService, Depends(get_document_service)],
+    current_user: Annotated[CurrentUser, Depends(require_permission("documents:read"))],
+) -> DocumentTreeResponse:
+    await _ensure_analysis_readable(analysis_service, analysis_id, current_user)
+    items = await document_service.tree(analysis_id=analysis_id)
+    return DocumentTreeResponse(items=[DocumentTreeNodeResponse(**item) for item in items])
 
 
 @router.get("/analysis/{analysis_id}/documents/{document_id}", response_model=DocumentResponse)

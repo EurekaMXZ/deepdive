@@ -169,6 +169,101 @@ class DocumentToolsTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(rejected_delete["ok"])
         self.assertEqual(rejected_delete["error"]["code"], "DOCUMENT_FINALIZED")
 
+    async def test_document_tree_and_sections_flow(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        storage = InMemoryObjectStorage()
+        documents = DocumentRepository()
+        document_service = DocumentService(repository=documents, storage=storage)
+        executor = SourceToolExecutor(
+            repository=FakeSnapshotRepository(),
+            storage=storage,
+            cache=FakeCache(),
+            permission_engine=PermissionEngine(),
+            document_service=document_service,
+        )
+        config = AppConfig(
+            tools=ToolsConfig(
+                enabled=("document_folder_create", "document_create", "document_get", "document_update")
+            )
+        )
+
+        folder = await executor.execute(
+            ToolExecutionContext(new_uuid7(), agent_id, snapshot_id, analysis_id),
+            "document_folder_create",
+            {"title": "后端", "slug": "backend", "parent_node_id": None, "sort_order": 10},
+            config=config,
+        )
+        created = await executor.execute(
+            ToolExecutionContext(new_uuid7(), agent_id, snapshot_id, analysis_id),
+            "document_create",
+            {
+                "title": "认证与鉴权",
+                "kind": "markdown",
+                "parent_node_id": folder["result"]["node_id"],
+                "slug": "auth-and-rbac",
+                "focus_area": "backend authentication and authorization",
+                "sections": [
+                    {
+                        "stable_id": "overview",
+                        "title": "Overview",
+                        "content": "Authentication entry points.",
+                        "sort_order": 10,
+                    },
+                    {
+                        "stable_id": "jwt",
+                        "title": "JWT",
+                        "content": "JWT issuing and validation.",
+                        "sort_order": 20,
+                    },
+                ],
+                "content": None,
+            },
+            config=config,
+        )
+        fetched = await executor.execute(
+            ToolExecutionContext(new_uuid7(), agent_id, snapshot_id, analysis_id),
+            "document_get",
+            {"document_id": created["result"]["document_id"], "include_content": True, "include_sections": True},
+            config=config,
+        )
+        updated = await executor.execute(
+            ToolExecutionContext(new_uuid7(), agent_id, snapshot_id, analysis_id),
+            "document_update",
+            {
+                "document_id": created["result"]["document_id"],
+                "expected_version": 1,
+                "sections": [
+                    {
+                        "stable_id": "jwt",
+                        "title": "JWT",
+                        "content": "JWT issuing, refresh, and validation.",
+                        "sort_order": 20,
+                    }
+                ],
+                "content": None,
+            },
+            config=config,
+        )
+
+        self.assertTrue(folder["ok"])
+        self.assertEqual(folder["result"]["node_type"], "folder")
+        self.assertEqual(folder["result"]["path"], "backend")
+        self.assertTrue(created["ok"])
+        self.assertEqual(created["result"]["node"]["parent_id"], folder["result"]["node_id"])
+        self.assertEqual(created["result"]["node"]["path"], "backend/auth-and-rbac")
+        self.assertEqual(created["result"]["focus_area"], "backend authentication and authorization")
+        self.assertEqual([section["stable_id"] for section in created["result"]["sections"]], ["overview", "jwt"])
+        self.assertIn("# 认证与鉴权", fetched["result"]["content"])
+        self.assertIn("## JWT", fetched["result"]["content"])
+        self.assertEqual(fetched["result"]["sections"][1]["content"], "JWT issuing and validation.")
+        self.assertEqual(updated["result"]["version"], 2)
+        self.assertEqual(updated["result"]["sections"][1]["content"], "JWT issuing, refresh, and validation.")
+        tree = await document_service.tree(analysis_id=analysis_id)
+        self.assertEqual(tree[0]["title"], "后端")
+        self.assertEqual(tree[0]["children"][0]["title"], "认证与鉴权")
+
     async def test_document_tool_call_replay_returns_revision_version_not_current_document(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()

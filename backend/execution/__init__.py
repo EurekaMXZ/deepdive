@@ -108,6 +108,7 @@ class SourceToolExecutor:
             "search_text": self._execute_search_text,
             "web_search": self._execute_web_search,
             "todo_update": self._execute_todo_update,
+            "document_folder_create": document_tool_handler,
             "document_create": document_tool_handler,
             "document_get": document_tool_handler,
             "document_update": document_tool_handler,
@@ -556,7 +557,18 @@ class SourceToolExecutor:
         if context.analysis_id is None:
             return _error(tool_name, "INVALID_ARGUMENTS", "Document tools require analysis_id.")
         try:
-            if tool_name == "document_create":
+            if tool_name == "document_folder_create":
+                result = await self._document_service.create_folder(
+                    analysis_id=context.analysis_id,
+                    agent_id=context.agent_id,
+                    title=str(arguments["title"]),
+                    slug=str(arguments["slug"]),
+                    parent_node_id=UUID(str(arguments["parent_node_id"]))
+                    if arguments.get("parent_node_id") is not None
+                    else None,
+                    sort_order=int(arguments.get("sort_order") or 0),
+                )
+            elif tool_name == "document_create":
                 kind = str(arguments.get("kind") or "markdown")
                 if kind != "markdown":
                     return _error(tool_name, "INVALID_ARGUMENTS", "document kind must be markdown.")
@@ -566,13 +578,20 @@ class SourceToolExecutor:
                     tool_call_id=context.tool_call_id,
                     title=str(arguments["title"]),
                     kind=kind,
-                    content=str(arguments.get("content") or ""),
+                    content=str(arguments.get("content") or "") if arguments.get("content") is not None else "",
+                    parent_node_id=UUID(str(arguments["parent_node_id"]))
+                    if arguments.get("parent_node_id") is not None
+                    else None,
+                    slug=str(arguments["slug"]) if arguments.get("slug") is not None else None,
+                    focus_area=str(arguments["focus_area"]) if arguments.get("focus_area") is not None else None,
+                    sections=_json_object_list(arguments.get("sections")),
                 )
             elif tool_name == "document_get":
                 result = await self._document_service.get(
                     analysis_id=context.analysis_id,
                     document_id=UUID(str(arguments["document_id"])),
                     include_content=bool(arguments.get("include_content", False)),
+                    include_sections=bool(arguments.get("include_sections", False)),
                 )
             elif tool_name == "document_update":
                 result = await self._document_service.update(
@@ -580,7 +599,8 @@ class SourceToolExecutor:
                     tool_call_id=context.tool_call_id,
                     document_id=UUID(str(arguments["document_id"])),
                     expected_version=int(arguments["expected_version"]),
-                    content=str(arguments.get("content") or ""),
+                    content=str(arguments.get("content") or "") if arguments.get("content") is not None else "",
+                    sections=_json_object_list(arguments.get("sections")),
                 )
             elif tool_name == "document_delete":
                 result = await self._document_service.delete(
@@ -602,6 +622,15 @@ class SourceToolExecutor:
             if isinstance(exc, DocumentToolError):
                 raise
             return _error(tool_name, "INVALID_ARGUMENTS", str(exc))
+        scope = {
+            "type": "analysis_artifact",
+            "analysis_id": str(context.analysis_id),
+            "snapshot_id": str(context.snapshot_id),
+        }
+        if "document_id" in result:
+            scope["document_id"] = str(result["document_id"])
+        if "node_id" in result:
+            scope["node_id"] = str(result["node_id"])
         return self._ok_with_ref(
             context,
             tool_name,
@@ -610,12 +639,7 @@ class SourceToolExecutor:
             [],
             False,
             None,
-            scope={
-                "type": "analysis_artifact",
-                "analysis_id": str(context.analysis_id),
-                "snapshot_id": str(context.snapshot_id),
-                "document_id": str(result["document_id"]) if "document_id" in result else None,
-            },
+            scope=scope,
         )
 
     def _ok_with_ref(

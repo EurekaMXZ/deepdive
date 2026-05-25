@@ -62,6 +62,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
                 enabled=(
                     "web_search",
                     "todo_update",
+                    "document_folder_create",
                     "document_create",
                     "document_get",
                     "document_update",
@@ -77,6 +78,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
             {
                 "web_search",
                 "todo_update",
+                "document_folder_create",
                 "document_create",
                 "document_get",
                 "document_update",
@@ -89,6 +91,16 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
             tools["web_search"]["parameters"]["properties"]["topic"]["enum"], ["general", "news", "finance"]
         )
         self.assertEqual(tools["web_search"]["parameters"]["properties"]["max_results"]["maximum"], 10)
+        self.assertIn("document_folder_create", tools)
+        self.assertIn("parent_node_id", tools["document_create"]["parameters"]["properties"])
+        self.assertIn("focus_area", tools["document_create"]["parameters"]["properties"])
+        self.assertEqual(tools["document_create"]["parameters"]["properties"]["sections"]["maxItems"], 20)
+        self.assertEqual(
+            tools["document_create"]["parameters"]["properties"]["sections"]["items"]["required"],
+            ["stable_id", "title", "content", "sort_order"],
+        )
+        self.assertIn("include_sections", tools["document_get"]["parameters"]["properties"])
+        self.assertIn("sections", tools["document_update"]["parameters"]["properties"])
         self.assertEqual(tools["todo_update"]["parameters"]["properties"]["items"]["maxItems"], 8)
         self.assertEqual(
             tools["todo_update"]["parameters"]["properties"]["items"]["items"]["properties"]["status"]["enum"],
@@ -103,7 +115,16 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
 
     def test_tool_registry_definitions_include_policy_metadata(self) -> None:
         registry = ToolRegistry.from_config(
-            ToolsConfig(enabled=("list_files", "web_search", "todo_update", "document_create", "document_get"))
+            ToolsConfig(
+                enabled=(
+                    "list_files",
+                    "web_search",
+                    "todo_update",
+                    "document_folder_create",
+                    "document_create",
+                    "document_get",
+                )
+            )
         )
         definitions = {tool.name: tool for tool in registry.tools}
 
@@ -120,6 +141,9 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(definitions["todo_update"].idempotent)
         self.assertFalse(definitions["todo_update"].parallel_safe)
         self.assertTrue(definitions["todo_update"].requires_analysis_id)
+        self.assertEqual(definitions["document_folder_create"].capability, ToolCapability.ARTIFACT_WRITE)
+        self.assertFalse(definitions["document_folder_create"].read_only)
+        self.assertFalse(definitions["document_folder_create"].parallel_safe)
         self.assertEqual(definitions["document_create"].capability, ToolCapability.ARTIFACT_WRITE)
         self.assertFalse(definitions["document_create"].read_only)
         self.assertFalse(definitions["document_create"].idempotent)
@@ -133,6 +157,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(is_parallel_safe_tool("read_file"))
         self.assertTrue(is_parallel_safe_tool("search_text"))
         self.assertFalse(is_parallel_safe_tool("todo_update"))
+        self.assertFalse(is_parallel_safe_tool("document_folder_create"))
         self.assertFalse(is_parallel_safe_tool("document_update"))
         self.assertFalse(is_parallel_safe_tool("missing_tool"))
 
@@ -165,6 +190,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
                     "read_file",
                     "web_search",
                     "todo_update",
+                    "document_folder_create",
                     "document_create",
                     "document_get",
                     "document_update",

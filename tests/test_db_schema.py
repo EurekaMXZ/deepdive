@@ -37,6 +37,9 @@ class DatabaseSchemaTest(unittest.TestCase):
             "snapshot_files",
             "agent_instruction_files",
             "documents",
+            "document_nodes",
+            "document_sections",
+            "document_section_revisions",
             "document_revisions",
         }
 
@@ -79,6 +82,9 @@ class DatabaseSchemaTest(unittest.TestCase):
         snapshots = metadata.tables["snapshots"]
         snapshot_files = metadata.tables["snapshot_files"]
         document_revisions = metadata.tables["document_revisions"]
+        document_nodes = metadata.tables["document_nodes"]
+        document_sections = metadata.tables["document_sections"]
+        document_section_revisions = metadata.tables["document_section_revisions"]
         users = metadata.tables["users"]
         refresh_tokens = metadata.tables["refresh_tokens"]
         roles = metadata.tables["roles"]
@@ -207,6 +213,22 @@ class DatabaseSchemaTest(unittest.TestCase):
             ("tool_call_id",),
             {_columns(index) for index in document_revisions.indexes if index.unique},
         )
+        self.assertIn(
+            ("analysis_id", "parent_id", "slug"),
+            {_columns(index) for index in document_nodes.indexes if index.unique},
+        )
+        self.assertIn(
+            ("document_id",),
+            {_columns(index) for index in document_nodes.indexes if index.unique},
+        )
+        self.assertIn(
+            ("document_id", "stable_id"),
+            {_columns(index) for index in document_sections.indexes if index.unique},
+        )
+        self.assertIn(
+            ("section_id", "version"),
+            {_columns(index) for index in document_section_revisions.indexes if index.unique},
+        )
 
     def test_agent_todo_lists_have_expected_columns(self) -> None:
         todo_lists = metadata.tables["agent_todo_lists"]
@@ -227,6 +249,9 @@ class DatabaseSchemaTest(unittest.TestCase):
     def test_document_tables_have_expected_columns(self) -> None:
         documents = metadata.tables["documents"]
         revisions = metadata.tables["document_revisions"]
+        nodes = metadata.tables["document_nodes"]
+        sections = metadata.tables["document_sections"]
+        section_revisions = metadata.tables["document_section_revisions"]
 
         for column_name in [
             "analysis_id",
@@ -257,6 +282,52 @@ class DatabaseSchemaTest(unittest.TestCase):
         ]:
             with self.subTest(table="document_revisions", column=column_name):
                 self.assertIn(column_name, revisions.c)
+
+        for column_name in [
+            "analysis_id",
+            "agent_id",
+            "parent_id",
+            "node_type",
+            "document_id",
+            "title",
+            "slug",
+            "path",
+            "focus_area",
+            "sort_order",
+            "created_at",
+            "updated_at",
+        ]:
+            with self.subTest(table="document_nodes", column=column_name):
+                self.assertIn(column_name, nodes.c)
+
+        for column_name in [
+            "document_id",
+            "stable_id",
+            "title",
+            "sort_order",
+            "content_ref",
+            "content_hash",
+            "size_bytes",
+            "created_at",
+            "updated_at",
+        ]:
+            with self.subTest(table="document_sections", column=column_name):
+                self.assertIn(column_name, sections.c)
+
+        for column_name in [
+            "section_id",
+            "document_id",
+            "document_revision_id",
+            "version",
+            "title",
+            "sort_order",
+            "content_ref",
+            "content_hash",
+            "size_bytes",
+            "created_at",
+        ]:
+            with self.subTest(table="document_section_revisions", column=column_name):
+                self.assertIn(column_name, section_revisions.c)
 
     def test_agent_session_uses_limits_not_budget_naming(self) -> None:
         columns = metadata.tables["agent_sessions"].c

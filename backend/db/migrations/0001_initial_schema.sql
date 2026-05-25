@@ -293,12 +293,55 @@ CREATE TABLE documents (
     finalized_at timestamptz
 );
 
+CREATE TABLE document_nodes (
+    id uuid primary key default uuidv7(),
+    analysis_id uuid not null references analyses(id),
+    agent_id uuid not null references agent_sessions(id),
+    parent_id uuid references document_nodes(id),
+    node_type text not null,
+    document_id uuid references documents(id),
+    title text not null,
+    slug text not null,
+    path text not null,
+    focus_area text,
+    sort_order integer not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+);
+
 CREATE TABLE document_revisions (
     id uuid primary key default uuidv7(),
     document_id uuid not null references documents(id),
     version integer not null,
     tool_call_id uuid not null references tool_calls(id),
     operation text not null,
+    content_ref text not null,
+    content_hash text not null,
+    size_bytes bigint not null,
+    created_at timestamptz not null
+);
+
+CREATE TABLE document_sections (
+    id uuid primary key default uuidv7(),
+    document_id uuid not null references documents(id),
+    stable_id text not null,
+    title text not null,
+    sort_order integer not null,
+    content_ref text not null,
+    content_hash text not null,
+    size_bytes bigint not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+);
+
+CREATE TABLE document_section_revisions (
+    id uuid primary key default uuidv7(),
+    section_id uuid not null references document_sections(id),
+    document_id uuid not null references documents(id),
+    document_revision_id uuid not null references document_revisions(id),
+    version integer not null,
+    title text not null,
+    sort_order integer not null,
     content_ref text not null,
     content_hash text not null,
     size_bytes bigint not null,
@@ -485,11 +528,29 @@ CREATE INDEX ix_evidence_agent_path
 CREATE INDEX ix_documents_analysis_status
     ON documents (analysis_id, status);
 
+CREATE UNIQUE INDEX uq_document_nodes_analysis_parent_slug
+    ON document_nodes (analysis_id, parent_id, slug);
+
+CREATE UNIQUE INDEX uq_document_nodes_document_id
+    ON document_nodes (document_id);
+
+CREATE INDEX ix_document_nodes_analysis_parent_sort
+    ON document_nodes (analysis_id, parent_id, sort_order);
+
 CREATE UNIQUE INDEX uq_document_revisions_document_version
     ON document_revisions (document_id, version);
 
 CREATE UNIQUE INDEX uq_document_revisions_tool_call
     ON document_revisions (tool_call_id);
+
+CREATE UNIQUE INDEX uq_document_sections_document_stable_id
+    ON document_sections (document_id, stable_id);
+
+CREATE INDEX ix_document_sections_document_sort
+    ON document_sections (document_id, sort_order);
+
+CREATE UNIQUE INDEX uq_document_section_revisions_section_version
+    ON document_section_revisions (section_id, version);
 
 CREATE INDEX ix_outbox_events_published_created_at
     ON outbox_events (published_at, created_at);

@@ -178,11 +178,23 @@ class DatabaseMigrationTest(unittest.TestCase):
         )
         documents_body = _create_table_body(sql, "documents")
         document_revisions_body = _create_table_body(sql, "document_revisions")
+        document_nodes_body = _create_table_body(sql, "document_nodes")
+        document_sections_body = _create_table_body(sql, "document_sections")
+        document_section_revisions_body = _create_table_body(sql, "document_section_revisions")
         self.assertRegex(documents_body, r"\banalysis_id\s+uuid\s+not\s+null\b")
         self.assertRegex(documents_body, r"\bagent_id\s+uuid\s+not\s+null\b")
         self.assertRegex(documents_body, r"\bstatus\s+text\s+not\s+null\b")
         self.assertRegex(documents_body, r"\bcurrent_version\s+integer\s+not\s+null\b")
         self.assertRegex(document_revisions_body, r"\btool_call_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(document_nodes_body, r"\bparent_id\s+uuid\b")
+        self.assertRegex(document_nodes_body, r"\bnode_type\s+text\s+not\s+null\b")
+        self.assertRegex(document_nodes_body, r"\bdocument_id\s+uuid\b")
+        self.assertRegex(document_nodes_body, r"\bfocus_area\s+text\b")
+        self.assertRegex(document_sections_body, r"\bdocument_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(document_sections_body, r"\bstable_id\s+text\s+not\s+null\b")
+        self.assertRegex(document_sections_body, r"\bsort_order\s+integer\s+not\s+null\b")
+        self.assertRegex(document_section_revisions_body, r"\bsection_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(document_section_revisions_body, r"\bdocument_revision_id\s+uuid\s+not\s+null\b")
         self.assertRegex(
             sql,
             r"create\s+unique\s+index\s+uq_document_revisions_document_version\s+on\s+document_revisions"
@@ -192,6 +204,21 @@ class DatabaseMigrationTest(unittest.TestCase):
             sql,
             r"create\s+unique\s+index\s+uq_document_revisions_tool_call\s+on\s+document_revisions"
             r"\s+\(tool_call_id\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_document_nodes_analysis_parent_slug\s+on\s+document_nodes"
+            r"\s+\(analysis_id,\s*parent_id,\s*slug\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_document_sections_document_stable_id\s+on\s+document_sections"
+            r"\s+\(document_id,\s*stable_id\)",
+        )
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_document_section_revisions_section_version"
+            r"\s+on\s+document_section_revisions\s+\(section_id,\s*version\)",
         )
 
     def test_migration_defines_query_path_indexes(self) -> None:
@@ -209,6 +236,8 @@ class DatabaseMigrationTest(unittest.TestCase):
             "ix_agent_context_items_agent_compacted_seq": "agent_context_items",
             "ix_agent_todo_lists_analysis_version": "agent_todo_lists",
             "ix_agent_stream_events_agent_seq": "agent_stream_events",
+            "ix_document_nodes_analysis_parent_sort": "document_nodes",
+            "ix_document_sections_document_sort": "document_sections",
             "ix_tool_calls_agent_status": "tool_calls",
             "ix_tool_calls_claim_expires_at": "tool_calls",
             "ix_tool_calls_openai_call_id": "tool_calls",

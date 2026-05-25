@@ -1559,6 +1559,8 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("source snapshot tools", context["instructions"])
         self.assertIn("web search tools", context["instructions"])
         self.assertIn("document artifact tools", context["instructions"])
+        self.assertIn("multiple focused documents arranged in a document tree", context["instructions"])
+        self.assertIn("multiple structured sections", context["instructions"])
         self.assertNotIn("Use only the provided read-only tools", context["instructions"])
 
     async def test_openai_web_search_config_adds_hosted_tool_and_sources_include(self) -> None:

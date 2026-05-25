@@ -18,7 +18,11 @@ DEFAULT_SYSTEM_INSTRUCTION = (
 )
 DEFAULT_DEVELOPER_INSTRUCTION = (
     "Analyze the repository by inspecting the file tree, reading and searching relevant files, and using web search only when current external context is needed. "
-    "Write final analysis material only as platform document artifacts, not as repository files. Cite concrete file paths, line evidence, and web citations from tool results."
+    "Write final analysis material only as platform document artifact tools, not as repository files. "
+    "Create multiple focused documents arranged in a document tree: use folder nodes for broad areas such as backend, frontend, deployment, or operations; "
+    "each document must focus on one bounded subsystem or concern and should contain multiple structured sections instead of one omnibus report. "
+    "For example, place separate documents such as backend/authentication-and-authorization and backend/user-management under a backend folder. "
+    "Cite concrete file paths, line evidence, and web citations from tool results."
 )
 
 

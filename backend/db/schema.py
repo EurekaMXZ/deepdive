@@ -396,6 +396,34 @@ documents = Table(
 Index("ix_documents_analysis_status", documents.c.analysis_id, documents.c.status)
 
 
+document_nodes = Table(
+    "document_nodes",
+    metadata,
+    uuid_pk(),
+    Column("analysis_id", UUID(as_uuid=True), ForeignKey("analyses.id"), nullable=False),
+    Column("agent_id", UUID(as_uuid=True), ForeignKey("agent_sessions.id"), nullable=False),
+    Column("parent_id", UUID(as_uuid=True), ForeignKey("document_nodes.id")),
+    Column("node_type", Text, nullable=False),
+    Column("document_id", UUID(as_uuid=True), ForeignKey("documents.id")),
+    Column("title", Text, nullable=False),
+    Column("slug", Text, nullable=False),
+    Column("path", Text, nullable=False),
+    Column("focus_area", Text),
+    Column("sort_order", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index(
+    "uq_document_nodes_analysis_parent_slug",
+    document_nodes.c.analysis_id,
+    document_nodes.c.parent_id,
+    document_nodes.c.slug,
+    unique=True,
+)
+Index("uq_document_nodes_document_id", document_nodes.c.document_id, unique=True)
+Index("ix_document_nodes_analysis_parent_sort", document_nodes.c.analysis_id, document_nodes.c.parent_id, document_nodes.c.sort_order)
+
+
 document_revisions = Table(
     "document_revisions",
     metadata,
@@ -416,6 +444,47 @@ Index(
     unique=True,
 )
 Index("uq_document_revisions_tool_call", document_revisions.c.tool_call_id, unique=True)
+
+
+document_sections = Table(
+    "document_sections",
+    metadata,
+    uuid_pk(),
+    Column("document_id", UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False),
+    Column("stable_id", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("sort_order", Integer, nullable=False),
+    Column("content_ref", Text, nullable=False),
+    Column("content_hash", Text, nullable=False),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index("uq_document_sections_document_stable_id", document_sections.c.document_id, document_sections.c.stable_id, unique=True)
+Index("ix_document_sections_document_sort", document_sections.c.document_id, document_sections.c.sort_order)
+
+
+document_section_revisions = Table(
+    "document_section_revisions",
+    metadata,
+    uuid_pk(),
+    Column("section_id", UUID(as_uuid=True), ForeignKey("document_sections.id"), nullable=False),
+    Column("document_id", UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False),
+    Column("document_revision_id", UUID(as_uuid=True), ForeignKey("document_revisions.id"), nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("sort_order", Integer, nullable=False),
+    Column("content_ref", Text, nullable=False),
+    Column("content_hash", Text, nullable=False),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index(
+    "uq_document_section_revisions_section_version",
+    document_section_revisions.c.section_id,
+    document_section_revisions.c.version,
+    unique=True,
+)
 
 
 memory_summaries = Table(
