@@ -1,6 +1,7 @@
 import {
   BadgeCheck,
   Cable,
+  ClipboardList,
   FolderSearch,
   LogOut,
   Plus,
@@ -9,6 +10,7 @@ import {
   WalletCards,
 } from 'lucide-react'
 import type {
+  AppSection,
   NavigationItem,
   QuickAction,
   RepositorySuggestion,
@@ -16,21 +18,35 @@ import type {
   UserProfile,
 } from './types'
 
+export const defaultAppSection: AppSection = 'explore'
+
 export const navigationItems: NavigationItem[] = [
   {
+    id: 'explore',
     label: '探索项目',
-    description: '搜索并分析公开 Git 仓库',
+    description: '搜索公开 Git 仓库',
+    href: '/explore',
     icon: FolderSearch,
-    active: true,
   },
   {
+    id: 'analysis-submissions',
+    label: '提交分析',
+    description: '查看和提交分析任务',
+    href: '/analysis',
+    icon: ClipboardList,
+  },
+  {
+    id: 'subscription',
     label: '订阅',
     description: '管理分析额度与团队计划',
+    href: '/subscription',
     icon: WalletCards,
   },
   {
+    id: 'mcp',
     label: 'MCP',
     description: '连接上下文服务与工具源',
+    href: '/mcp',
     icon: Cable,
   },
 ]
@@ -39,10 +55,12 @@ export const quickActions: QuickAction[] = [
   {
     label: '添加仓库',
     icon: Plus,
+    href: '/analysis',
   },
   {
     label: 'DeepDive MCP',
     icon: Cable,
+    href: '/mcp',
   },
 ]
 
@@ -87,4 +105,31 @@ export const signOutAction: UserMenuAction = {
   label: '退出登录',
   icon: LogOut,
   danger: true,
+}
+
+export function createNavigationItems(activeSection: AppSection): NavigationItem[] {
+  return navigationItems.map((item) => ({
+    ...item,
+    active: item.id === activeSection,
+  }))
+}
+
+export function routeForAppSection(section: AppSection): string {
+  return navigationItems.find((item) => item.id === section)?.href ?? '/analysis'
+}
+
+export function sectionForPathname(pathname: string): AppSection {
+  if (pathname === '/') {
+    return 'explore'
+  }
+  if (pathname === '/explore' || pathname.startsWith('/explore/')) {
+    return 'explore'
+  }
+  if (pathname === '/subscription' || pathname.startsWith('/subscription/')) {
+    return 'subscription'
+  }
+  if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
+    return 'mcp'
+  }
+  return 'analysis-submissions'
 }

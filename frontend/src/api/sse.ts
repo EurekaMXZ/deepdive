@@ -1,4 +1,10 @@
-import type { AnalysisStatus, AnalysisStreamEvent } from '../domain/analysis.ts'
+import type {
+  AnalysisStatus,
+  AnalysisStreamEvent,
+  AnalysisTodoItem,
+  AnalysisTodoList,
+  AnalysisTodoStatus,
+} from '../domain/analysis.ts'
 
 export type ParsedSseEvent = {
   id?: string
@@ -8,6 +14,7 @@ export type ParsedSseEvent = {
 }
 
 export type SubscribeAnalysisEventsInput = {
+  accessToken?: string | (() => string | null | undefined)
   analysisId: string
   baseUrl?: string
   lastEventId?: string | null
@@ -85,6 +92,30 @@ export function normalizeAnalysisSseEvent(
     })
   }
 
+  if (
+    event.event === 'model_reasoning_summary.delta' ||
+    event.event === 'model_reasoning.delta' ||
+    event.event === 'reasoning.delta'
+  ) {
+    return cleanUndefined({
+      kind: 'reasoning_delta',
+      text: stringValue(data.delta, stringValue(data.text, '')),
+      itemId: optionalString(data.item_id),
+      responseId: optionalString(data.response_id),
+      replayId,
+    })
+  }
+
+  if (event.event === 'model_reasoning_summary.done') {
+    return cleanUndefined({
+      kind: 'reasoning_done',
+      text: stringValue(data.text, ''),
+      itemId: optionalString(data.item_id),
+      responseId: optionalString(data.response_id),
+      replayId,
+    })
+  }
+
   if (event.event === 'tool_call') {
     return {
       kind: 'tool_call',
@@ -109,6 +140,14 @@ export function normalizeAnalysisSseEvent(
       nextCursor: optionalNullableString(data.next_cursor),
       replayId,
     }
+  }
+
+  if (event.event === 'todo_update') {
+    return cleanUndefined({
+      kind: 'todo_update',
+      todo: normalizeTodoPayload(data),
+      replayId,
+    })
   }
 
   if (event.event === 'compact') {
@@ -167,7 +206,7 @@ export async function subscribeAnalysisEvents(
 ): Promise<void> {
   const fetcher = input.fetch ?? fetch.bind(globalThis)
   const response = await fetcher(buildEventsUrl(input), {
-    headers: input.lastEventId ? { 'Last-Event-ID': input.lastEventId } : undefined,
+    headers: buildEventHeaders(input),
     signal: input.signal,
   })
   if (!response.ok) {
@@ -189,6 +228,22 @@ export async function subscribeAnalysisEvents(
       input.onEvent(normalizeAnalysisSseEvent(event))
     }
   }
+}
+
+function buildEventHeaders(input: SubscribeAnalysisEventsInput): HeadersInit | undefined {
+  const headers: Record<string, string> = {}
+  const token = resolveAccessToken(input.accessToken)
+  if (token) {
+    headers.authorization = `Bearer ${token}`
+  }
+  if (input.lastEventId) {
+    headers['Last-Event-ID'] = input.lastEventId
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined
+}
+
+function resolveAccessToken(accessToken: SubscribeAnalysisEventsInput['accessToken']): string | null | undefined {
+  return typeof accessToken === 'function' ? accessToken() : accessToken
 }
 
 function parseSseFrame(frame: string): ParsedSseEvent | null {
@@ -315,6 +370,40 @@ function stringArray(value: unknown): string[] | undefined {
     return undefined
   }
   return value.filter((item): item is string => typeof item === 'string')
+}
+
+const TODO_STATUSES = new Set<AnalysisTodoStatus>(['pending', 'in_progress', 'completed'])
+
+function normalizeTodoPayload(data: Record<string, unknown>): AnalysisTodoList {
+  const version = optionalNumber(data.version)
+  return {
+    version: version !== undefined && Number.isFinite(version) ? version : 0,
+    items: normalizeTodoItems(data.items),
+    note: optionalString(data.note) ?? null,
+  }
+}
+
+function normalizeTodoItems(value: unknown): AnalysisTodoItem[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const items: AnalysisTodoItem[] = []
+  for (const rawItem of value) {
+    const item = asRecord(rawItem)
+    const id = optionalString(item.id)
+    const title = optionalString(item.title)
+    const status = optionalString(item.status)
+    if (!id || !title || !isTodoStatus(status)) {
+      continue
+    }
+    items.push({ id, title, status })
+  }
+  return items
+}
+
+function isTodoStatus(value: string | undefined): value is AnalysisTodoStatus {
+  return value !== undefined && TODO_STATUSES.has(value as AnalysisTodoStatus)
 }
 
 function cleanUndefined<T extends Record<string, unknown>>(value: T): T {

@@ -60,6 +60,41 @@ export type AnalysisListPage = {
   nextCursor: string | null
 }
 
+export type AnalysisSuggestion = {
+  analysisId: AnalysisId
+  agentId: AgentId
+  snapshotId: SnapshotId | null
+  status: AnalysisStatus
+  repositoryLabel: string
+  repositoryUrl: string
+  requestedRef: string
+  resolvedCommitSha: string | null
+  updatedAt: string
+}
+
+export type ListAnalysisSuggestionsInput = {
+  repositoryQuery: string
+  limit?: number
+}
+
+export type AnalysisSuggestionListPage = {
+  items: AnalysisSuggestion[]
+}
+
+export type AnalysisTodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export type AnalysisTodoItem = {
+  id: string
+  title: string
+  status: AnalysisTodoStatus
+}
+
+export type AnalysisTodoList = {
+  version: number
+  items: AnalysisTodoItem[]
+  note: string | null
+}
+
 export type AnalysisStreamEvent =
   | {
       kind: 'status'
@@ -72,8 +107,22 @@ export type AnalysisStreamEvent =
       replayId?: string
     }
   | {
+      kind: 'reasoning_delta'
+      text: string
+      itemId?: string
+      responseId?: string
+      replayId?: string
+    }
+  | {
       kind: 'reasoning_summary'
       text: string
+      itemId?: string
+      responseId?: string
+      replayId?: string
+    }
+  | {
+      kind: 'reasoning_done'
+      text?: string
       itemId?: string
       responseId?: string
       replayId?: string
@@ -96,6 +145,11 @@ export type AnalysisStreamEvent =
       evidenceIds?: string[]
       truncated?: boolean
       nextCursor?: string | null
+      replayId?: string
+    }
+  | {
+      kind: 'todo_update'
+      todo: AnalysisTodoList
       replayId?: string
     }
   | {
@@ -135,55 +189,34 @@ export type AnalysisStreamEvent =
       replayId?: string
     }
 
-export type AnalysisTimelineItem =
+export type AnalysisStreamItem =
   | {
-      type: 'status'
-      status: AnalysisStatus
+      id: string
+      type: 'reasoning'
+      markdown: string
+      streaming: boolean
       replayId?: string
     }
   | {
-      type: 'reasoning_summary'
-      text: string
+      id: string
+      type: 'output'
+      markdown: string
+      streaming: boolean
       replayId?: string
     }
   | {
-      type: 'tool_call'
+      id: string
+      type: 'tool'
       toolCallId?: string
       toolName: string
       arguments: Record<string, unknown>
-      replayId?: string
-    }
-  | {
-      type: 'tool_result'
-      toolCallId?: string
-      toolName?: string
       ok?: boolean
       result?: unknown
       error?: unknown
-      replayId?: string
-    }
-  | {
-      type: 'compact'
-      tokenEstimate?: number
-      threshold?: number
-      replayId?: string
-    }
-  | {
-      type: 'attempt_failed'
-      message?: string
-      retryable?: boolean
-      replayId?: string
-    }
-  | {
-      type: 'error'
-      code?: string
-      message?: string
-      retryable?: boolean
-      replayId?: string
-    }
-  | {
-      type: 'done'
-      status: AnalysisStatus
+      resultRef?: string
+      evidenceIds?: string[]
+      truncated?: boolean
+      nextCursor?: string | null
       replayId?: string
     }
 
@@ -191,7 +224,8 @@ export type AnalysisStreamState = {
   status: AnalysisStatus | null
   outputText: string
   reasoningSummaries: string[]
-  timeline: AnalysisTimelineItem[]
+  streamItems: AnalysisStreamItem[]
+  todo: AnalysisTodoList | null
   lastReplayId: string | null
   isTerminal: boolean
   error: { code?: string; message?: string; retryable?: boolean } | null
@@ -226,11 +260,22 @@ export function createInitialAnalysisStreamState(): AnalysisStreamState {
     status: null,
     outputText: '',
     reasoningSummaries: [],
-    timeline: [],
+    streamItems: [],
+    todo: null,
     lastReplayId: null,
     isTerminal: false,
     error: null,
   }
+}
+
+export function createAnalysisStreamItems(
+  state: AnalysisStreamState,
+): AnalysisStreamItem[] {
+  return state.streamItems
+}
+
+function toolItemKey(toolCallId?: string, toolName?: string): string {
+  return toolCallId ?? `tool-name:${toolName ?? 'unknown'}`
 }
 
 export function applyAnalysisStreamEvent(
@@ -245,14 +290,6 @@ export function applyAnalysisStreamEvent(
       status: event.status,
       lastReplayId: nextReplayId,
       isTerminal: isTerminalAnalysisStatus(event.status),
-      timeline: [
-        ...state.timeline,
-        {
-          type: 'status',
-          status: event.status,
-          replayId: event.replayId,
-        },
-      ],
     }
   }
 
@@ -260,6 +297,21 @@ export function applyAnalysisStreamEvent(
     return {
       ...state,
       outputText: state.outputText + event.text,
+      streamItems: appendOutputDelta(state.streamItems, event.text, event.replayId, state.isTerminal),
+      lastReplayId: nextReplayId,
+    }
+  }
+
+  if (event.kind === 'reasoning_delta') {
+    return {
+      ...state,
+      streamItems: appendReasoningDelta(
+        state.streamItems,
+        event.text,
+        reasoningStreamItemId(event.itemId, event.responseId),
+        event.replayId,
+        state.isTerminal,
+      ),
       lastReplayId: nextReplayId,
     }
   }
@@ -268,15 +320,26 @@ export function applyAnalysisStreamEvent(
     return {
       ...state,
       reasoningSummaries: [...state.reasoningSummaries, event.text],
+      streamItems: mergeReasoningSummary(
+        state.streamItems,
+        event.text,
+        reasoningStreamItemId(event.itemId, event.responseId),
+        event.replayId,
+      ),
       lastReplayId: nextReplayId,
-      timeline: [
-        ...state.timeline,
-        {
-          type: 'reasoning_summary',
-          text: event.text,
-          replayId: event.replayId,
-        },
-      ],
+    }
+  }
+
+  if (event.kind === 'reasoning_done') {
+    return {
+      ...state,
+      streamItems: finishReasoningItem(
+        state.streamItems,
+        event.text,
+        reasoningStreamItemId(event.itemId, event.responseId),
+        event.replayId,
+      ),
+      lastReplayId: nextReplayId,
     }
   }
 
@@ -284,16 +347,7 @@ export function applyAnalysisStreamEvent(
     return {
       ...state,
       lastReplayId: nextReplayId,
-      timeline: [
-        ...state.timeline,
-        {
-          type: 'tool_call',
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          arguments: event.arguments,
-          replayId: event.replayId,
-        },
-      ],
+      streamItems: appendToolCall(state.streamItems, event),
     }
   }
 
@@ -301,18 +355,15 @@ export function applyAnalysisStreamEvent(
     return {
       ...state,
       lastReplayId: nextReplayId,
-      timeline: [
-        ...state.timeline,
-        {
-          type: 'tool_result',
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          ok: event.ok,
-          result: event.result,
-          error: event.error,
-          replayId: event.replayId,
-        },
-      ],
+      streamItems: appendToolResult(state.streamItems, event),
+    }
+  }
+
+  if (event.kind === 'todo_update') {
+    return {
+      ...state,
+      todo: event.todo,
+      lastReplayId: nextReplayId,
     }
   }
 
@@ -320,15 +371,6 @@ export function applyAnalysisStreamEvent(
     return {
       ...state,
       lastReplayId: nextReplayId,
-      timeline: [
-        ...state.timeline,
-        {
-          type: 'compact',
-          tokenEstimate: event.tokenEstimate,
-          threshold: event.threshold,
-          replayId: event.replayId,
-        },
-      ],
     }
   }
 
@@ -336,15 +378,6 @@ export function applyAnalysisStreamEvent(
     return {
       ...state,
       lastReplayId: nextReplayId,
-      timeline: [
-        ...state.timeline,
-        {
-          type: 'attempt_failed',
-          message: event.message,
-          retryable: event.retryable,
-          replayId: event.replayId,
-        },
-      ],
     }
   }
 
@@ -354,14 +387,7 @@ export function applyAnalysisStreamEvent(
       status: event.status,
       lastReplayId: nextReplayId,
       isTerminal: true,
-      timeline: [
-        ...state.timeline,
-        {
-          type: 'done',
-          status: event.status,
-          replayId: event.replayId,
-        },
-      ],
+      streamItems: finishStreamingItems(state.streamItems),
     }
   }
 
@@ -371,21 +397,12 @@ export function applyAnalysisStreamEvent(
       status: 'failed',
       lastReplayId: nextReplayId,
       isTerminal: true,
+      streamItems: finishStreamingItems(state.streamItems),
       error: {
         code: event.code,
         message: event.message,
         retryable: event.retryable,
       },
-      timeline: [
-        ...state.timeline,
-        {
-          type: 'error',
-          code: event.code,
-          message: event.message,
-          retryable: event.retryable,
-          replayId: event.replayId,
-        },
-      ],
     }
   }
 
@@ -393,4 +410,213 @@ export function applyAnalysisStreamEvent(
     ...state,
     lastReplayId: nextReplayId,
   }
+}
+
+function appendOutputDelta(
+  items: AnalysisStreamItem[],
+  text: string,
+  replayId: string | undefined,
+  isTerminal: boolean,
+): AnalysisStreamItem[] {
+  const index = items.findIndex((item) => item.type === 'output')
+  if (index < 0) {
+    return [
+      ...items,
+      withoutUndefinedOptionalFields({
+        id: 'output',
+        type: 'output',
+        markdown: text,
+        streaming: !isTerminal,
+        replayId,
+      }),
+    ]
+  }
+
+  return items.map((item, itemIndex) =>
+    itemIndex === index && item.type === 'output'
+      ? {
+          ...item,
+          markdown: item.markdown + text,
+          streaming: !isTerminal,
+          replayId,
+        }
+      : item,
+  )
+}
+
+function appendReasoningDelta(
+  items: AnalysisStreamItem[],
+  text: string,
+  id: string,
+  replayId: string | undefined,
+  isTerminal: boolean,
+): AnalysisStreamItem[] {
+  const index = items.findIndex((item) => item.id === id && item.type === 'reasoning')
+  if (index < 0) {
+    return [
+      ...items,
+      withoutUndefinedOptionalFields({
+        id,
+        type: 'reasoning',
+        markdown: text,
+        streaming: !isTerminal,
+        replayId,
+      }),
+    ]
+  }
+
+  return items.map((item, itemIndex) =>
+    itemIndex === index && item.type === 'reasoning'
+      ? {
+          ...item,
+          markdown: item.markdown + text,
+          streaming: !isTerminal,
+          replayId,
+        }
+      : item,
+  )
+}
+
+function mergeReasoningSummary(
+  items: AnalysisStreamItem[],
+  markdown: string,
+  id: string,
+  replayId: string | undefined,
+): AnalysisStreamItem[] {
+  const index = items.findIndex((item) => item.id === id && item.type === 'reasoning')
+  if (index >= 0) {
+    return items.map((item, itemIndex) =>
+      itemIndex === index && item.type === 'reasoning'
+        ? {
+            ...item,
+            markdown,
+            streaming: false,
+            replayId,
+          }
+        : item,
+    )
+  }
+
+  return [
+    ...items,
+    withoutUndefinedOptionalFields({
+      id,
+      type: 'reasoning',
+      markdown,
+      streaming: false,
+      replayId,
+    }),
+  ]
+}
+
+function finishReasoningItem(
+  items: AnalysisStreamItem[],
+  markdown: string | undefined,
+  id: string,
+  replayId: string | undefined,
+): AnalysisStreamItem[] {
+  const index = items.findIndex((item) => item.id === id && item.type === 'reasoning')
+  if (index < 0) {
+    if (!markdown) {
+      return items
+    }
+    return mergeReasoningSummary(items, markdown, id, replayId)
+  }
+
+  return items.map((item, itemIndex) =>
+    itemIndex === index && item.type === 'reasoning'
+      ? {
+          ...item,
+          markdown: markdown || item.markdown,
+          streaming: false,
+          replayId,
+        }
+      : item,
+  )
+}
+
+function appendToolCall(
+  items: AnalysisStreamItem[],
+  event: Extract<AnalysisStreamEvent, { kind: 'tool_call' }>,
+): AnalysisStreamItem[] {
+  return [
+    ...items,
+    {
+      id: `tool-${event.toolCallId ?? event.replayId ?? items.length}`,
+      type: 'tool',
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      arguments: event.arguments,
+      replayId: event.replayId,
+    },
+  ]
+}
+
+function appendToolResult(
+  items: AnalysisStreamItem[],
+  event: Extract<AnalysisStreamEvent, { kind: 'tool_result' }>,
+): AnalysisStreamItem[] {
+  const resultPatch = withoutUndefinedOptionalFields({
+    ok: event.ok,
+    result: event.result,
+    error: event.error,
+    resultRef: event.resultRef,
+    evidenceIds: event.evidenceIds,
+    truncated: event.truncated,
+    nextCursor: event.nextCursor,
+    replayId: event.replayId,
+  })
+  const index = items.findIndex(
+    (item) =>
+      item.type === 'tool' &&
+      toolItemKey(item.toolCallId, item.toolName) === toolItemKey(event.toolCallId, event.toolName),
+  )
+
+  if (index < 0) {
+    return [
+      ...items,
+      {
+        id: `tool-${event.toolCallId ?? event.replayId ?? items.length}`,
+        type: 'tool',
+        toolCallId: event.toolCallId,
+        toolName: event.toolName ?? 'unknown_tool',
+        arguments: {},
+        ...resultPatch,
+      },
+    ]
+  }
+
+  return items.map((item, itemIndex) =>
+    itemIndex === index && item.type === 'tool'
+      ? {
+          ...item,
+          ...resultPatch,
+        }
+      : item,
+  )
+}
+
+function finishStreamingItems(items: AnalysisStreamItem[]): AnalysisStreamItem[] {
+  return items.map((item) =>
+    item.type === 'reasoning' || item.type === 'output'
+      ? {
+          ...item,
+          streaming: false,
+        }
+      : item,
+  )
+}
+
+function reasoningStreamItemId(
+  itemId?: string,
+  responseId?: string,
+  replayId?: string,
+): string {
+  return `reasoning-${itemId ?? responseId ?? replayId ?? 'current'}`
+}
+
+function withoutUndefinedOptionalFields<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined),
+  ) as T
 }

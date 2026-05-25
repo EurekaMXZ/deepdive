@@ -5,6 +5,7 @@ import {
   SseDecoder,
   normalizeAnalysisSseEvent,
   parseSseEvents,
+  subscribeAnalysisEvents,
 } from '../src/api/sse.ts'
 
 test('parses persisted SSE events with replay id and JSON payload', () => {
@@ -74,9 +75,97 @@ test('normalizes backend persisted and live model events into analysis stream ev
       rawData: '{}',
     }),
     {
-      kind: 'raw',
-      event: 'model_reasoning_summary.delta',
-      data: { type: 'model_reasoning_summary.delta', text: '隐藏的增量' },
+      kind: 'reasoning_delta',
+      text: '隐藏的增量',
     },
   )
+
+  assert.deepEqual(
+    normalizeAnalysisSseEvent({
+      id: '8',
+      event: 'model_reasoning_summary.done',
+      data: { type: 'model_reasoning_summary.done', text: '完整 summary', item_id: 'rs_1' },
+      rawData: '{}',
+    }),
+    {
+      kind: 'reasoning_done',
+      text: '完整 summary',
+      itemId: 'rs_1',
+      replayId: '8',
+    },
+  )
+
+  assert.deepEqual(
+    normalizeAnalysisSseEvent({
+      id: '9',
+      event: 'model_reasoning.delta',
+      data: { delta: '后端新增 reasoning 流', item_id: 'rs_1' },
+      rawData: '{}',
+    }),
+    {
+      kind: 'reasoning_delta',
+      text: '后端新增 reasoning 流',
+      itemId: 'rs_1',
+      replayId: '9',
+    },
+  )
+})
+
+test('normalizes todo update events from analysis stream', () => {
+  assert.deepEqual(
+    normalizeAnalysisSseEvent({
+      id: '10',
+      event: 'todo_update',
+      data: {
+        version: 2,
+        items: [
+          { id: 'inspect-entry', title: 'Inspect entrypoint', status: 'completed' },
+          { id: 'trace-config', title: 'Trace config loading', status: 'in_progress' },
+          { id: 'invalid', title: 'Invalid item', status: 'blocked' },
+        ],
+        note: 'Current plan',
+      },
+      rawData: '{}',
+    }),
+    {
+      kind: 'todo_update',
+      replayId: '10',
+      todo: {
+        version: 2,
+        items: [
+          { id: 'inspect-entry', title: 'Inspect entrypoint', status: 'completed' },
+          { id: 'trace-config', title: 'Trace config loading', status: 'in_progress' },
+        ],
+        note: 'Current plan',
+      },
+    },
+  )
+})
+
+test('subscribeAnalysisEvents sends bearer token and replay headers', async () => {
+  const requests: Array<{ url: string; init: RequestInit }> = []
+
+  await subscribeAnalysisEvents({
+    analysisId: 'analysis-1',
+    baseUrl: 'http://api.test/',
+    accessToken: 'access-token',
+    lastEventId: '12',
+    fetch: async (url, init = {}) => {
+      requests.push({ url: String(url), init })
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('id: 13\nevent: status\ndata: {"status":"completed"}\n\n'))
+            controller.close()
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
+    },
+    onEvent() {},
+  })
+
+  assert.equal(requests[0].url, 'http://api.test/analysis/analysis-1/events')
+  assert.equal(new Headers(requests[0].init.headers).get('authorization'), 'Bearer access-token')
+  assert.equal(new Headers(requests[0].init.headers).get('last-event-id'), '12')
 })

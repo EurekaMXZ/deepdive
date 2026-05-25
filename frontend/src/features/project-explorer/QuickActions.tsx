@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import type { QuickAction } from '../../app/types'
 
 type QuickActionsProps = {
@@ -11,10 +12,10 @@ export function QuickActions({ actions }: QuickActionsProps) {
         const Icon = action.icon
 
         return (
-          <button className="quick-action" type="button" key={action.label}>
+          <Link className="quick-action" to={action.href} key={action.label}>
             <Icon size={18} aria-hidden="true" />
             <span>{action.label}</span>
-          </button>
+          </Link>
         )
       })}
     </div>

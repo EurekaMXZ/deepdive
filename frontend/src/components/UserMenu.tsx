@@ -5,11 +5,12 @@ import type { UserMenuAction, UserProfile } from '../app/types'
 type UserMenuProps = {
   actions: UserMenuAction[]
   isCollapsed: boolean
+  onSignOut?: () => void
   profile: UserProfile
   signOutAction: UserMenuAction
 }
 
-export function UserMenu({ actions, isCollapsed, profile, signOutAction }: UserMenuProps) {
+export function UserMenu({ actions, isCollapsed, onSignOut, profile, signOutAction }: UserMenuProps) {
   const SignOutIcon = signOutAction.icon
 
   return (
@@ -62,7 +63,7 @@ export function UserMenu({ actions, isCollapsed, profile, signOutAction }: UserM
             )
           })}
           <DropdownMenu.Separator className="user-menu-separator" />
-          <DropdownMenu.Item className="user-menu-item user-menu-item--danger">
+          <DropdownMenu.Item className="user-menu-item user-menu-item--danger" onSelect={onSignOut}>
             <SignOutIcon size={16} aria-hidden="true" />
             {signOutAction.label}
           </DropdownMenu.Item>
