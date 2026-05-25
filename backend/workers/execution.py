@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from typing import Any, Protocol, cast, runtime_checkable
 from uuid import UUID
 
 from backend.config import app_config_from_json
 from backend.events import EventEnvelope, EventType
-from backend.execution import SourceToolExecutor, ToolExecutionContext
+from backend.execution import SourceToolExecutor, ToolExecutionContext, is_parallel_safe_tool
 
 DENIED_TOOL_ERROR_CODES = frozenset(
     {
@@ -85,6 +86,62 @@ class SupportsFinalizeToolCall(Protocol):
 RenewClaim = Callable[..., Awaitable[bool]]
 
 
+class ToolCallRuntime:
+    def __init__(self) -> None:
+        self._locks: dict[UUID, AsyncReadWriteLock] = {}
+        self._locks_guard = asyncio.Lock()
+
+    @asynccontextmanager
+    async def acquire(self, *, agent_id: UUID, parallel_safe: bool) -> AsyncGenerator[None]:
+        lock = await self._lock(agent_id)
+        if parallel_safe:
+            async with lock.read_lock():
+                yield
+            return
+        async with lock.write_lock():
+            yield
+
+    async def _lock(self, agent_id: UUID) -> AsyncReadWriteLock:
+        async with self._locks_guard:
+            lock = self._locks.get(agent_id)
+            if lock is None:
+                lock = AsyncReadWriteLock()
+                self._locks[agent_id] = lock
+            return lock
+
+
+class AsyncReadWriteLock:
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._readers = 0
+        self._writer = False
+
+    @asynccontextmanager
+    async def read_lock(self) -> AsyncGenerator[None]:
+        async with self._condition:
+            await self._condition.wait_for(lambda: not self._writer)
+            self._readers += 1
+        try:
+            yield
+        finally:
+            async with self._condition:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._condition.notify_all()
+
+    @asynccontextmanager
+    async def write_lock(self) -> AsyncGenerator[None]:
+        async with self._condition:
+            await self._condition.wait_for(lambda: not self._writer and self._readers == 0)
+            self._writer = True
+        try:
+            yield
+        finally:
+            async with self._condition:
+                self._writer = False
+                self._condition.notify_all()
+
+
 class ExecutionCommandHandler:
     def __init__(
         self,
@@ -96,6 +153,7 @@ class ExecutionCommandHandler:
         self._tool_calls = tool_calls
         self._executor = executor
         self._heartbeat_interval_seconds = max(0.0, float(heartbeat_interval_seconds))
+        self._tool_runtime = ToolCallRuntime()
 
     async def __call__(self, event: EventEnvelope) -> None:
         if event.event_type != EventType.TOOL_CALL_REQUESTED:
@@ -119,17 +177,21 @@ class ExecutionCommandHandler:
         heartbeat_task = self._start_heartbeat(tool_call_id=tool_call_id, claim_owner=claim_owner)
         started = time.perf_counter()
         try:
-            result = await self._executor.execute(
-                ToolExecutionContext(
-                    tool_call_id=tool_call_id,
-                    analysis_id=event.analysis_id,
-                    agent_id=row["agent_id"],
-                    snapshot_id=row["snapshot_id"],
-                ),
-                row["tool_name"],
-                dict(row["arguments_json"]),
-                config=app_config_from_json(row.get("config_json")),
-            )
+            async with self._tool_runtime.acquire(
+                agent_id=event.agent_id,
+                parallel_safe=is_parallel_safe_tool(str(row["tool_name"])),
+            ):
+                result = await self._executor.execute(
+                    ToolExecutionContext(
+                        tool_call_id=tool_call_id,
+                        analysis_id=event.analysis_id,
+                        agent_id=row["agent_id"],
+                        snapshot_id=row["snapshot_id"],
+                    ),
+                    row["tool_name"],
+                    dict(row["arguments_json"]),
+                    config=app_config_from_json(row.get("config_json")),
+                )
         except Exception:
             await self._release_claim(tool_call_id=tool_call_id, claim_owner=claim_owner)
             raise

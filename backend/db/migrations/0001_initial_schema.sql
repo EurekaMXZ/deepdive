@@ -201,6 +201,19 @@ CREATE TABLE agent_context_items (
     created_at timestamptz not null
 );
 
+CREATE TABLE agent_context_windows (
+    id uuid primary key default uuidv7(),
+    agent_id uuid not null references agent_sessions(id),
+    turn_id uuid references agent_turns(id),
+    generation integer not null,
+    strategy text not null,
+    compaction_id text not null,
+    compacted_until_turn integer not null,
+    output_json jsonb not null,
+    usage_json jsonb not null,
+    created_at timestamptz not null
+);
+
 CREATE TABLE context_assemblies (
     id uuid primary key default uuidv7(),
     agent_id uuid not null references agent_sessions(id),
@@ -426,6 +439,12 @@ CREATE UNIQUE INDEX uq_agent_context_items_agent_idempotency
 
 CREATE INDEX ix_agent_context_items_agent_compacted_seq
     ON agent_context_items (agent_id, compacted_at, seq);
+
+CREATE UNIQUE INDEX uq_agent_context_windows_agent_generation
+    ON agent_context_windows (agent_id, generation);
+
+CREATE INDEX ix_agent_context_windows_agent_created_at
+    ON agent_context_windows (agent_id, created_at);
 
 CREATE INDEX ix_tool_calls_agent_status
     ON tool_calls (agent_id, status);

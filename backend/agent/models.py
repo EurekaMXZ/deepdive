@@ -34,3 +34,21 @@ class ModelResponse:
     tool_calls: list[ModelToolCall]
     usage: dict[str, int]
     output_items: list[dict[str, Any]] | None = None
+
+
+@dataclass(frozen=True)
+class CompactionResponse:
+    compaction_id: str
+    output: list[dict[str, Any]]
+    usage: dict[str, int]
+
+
+@dataclass(frozen=True)
+class CompactionDecision:
+    strategy: str | None = None
+    remote_output: list[dict[str, Any]] | None = None
+    replacement_input: list[dict[str, Any]] | None = None
+
+    @property
+    def compacted(self) -> bool:
+        return self.strategy is not None

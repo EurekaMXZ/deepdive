@@ -5,6 +5,7 @@ import json
 from typing import Any, TypeGuard, cast
 from uuid import UUID
 
+from backend.agent.context_manager import AgentContextManager
 from backend.agent.models import AgentSessionState, ModelResponse
 from backend.agent.ports import ContextAssemblyRepository
 from backend.config import app_config_from_json
@@ -25,6 +26,7 @@ class ContextAssembler:
     def __init__(self, *, repository: ContextAssemblyRepository, storage: ObjectStorage) -> None:
         self._repository = repository
         self._storage = storage
+        self._context_manager = AgentContextManager(repository=repository)
 
     async def assemble(
         self,
@@ -32,16 +34,22 @@ class ContextAssembler:
         session: AgentSessionState,
         turn_id: UUID,
         extra_items: list[dict[str, Any]] | None = None,
+        override_input_items: list[dict[str, Any]] | None = None,
         include_local_history: bool = False,
+        include_base_context: bool = True,
+        persist: bool = True,
     ) -> dict[str, Any]:
-        input_items = await self._repository.load_context_items(session=session)
-        input_items.extend(extra_items or [])
-        if include_local_history:
-            local_history_items = await self._local_history_context_items(
-                session=session,
-                exclude_call_ids=_call_ids_from_items(extra_items or []),
-            )
-            input_items.extend(local_history_items)
+        if override_input_items is not None:
+            input_items = list(override_input_items)
+        else:
+            input_items = await self._repository.load_context_items(session=session) if include_base_context else []
+            input_items.extend(extra_items or [])
+            if include_local_history:
+                local_history_items = await self._local_history_context_items(
+                    session=session,
+                    exclude_call_ids=_call_ids_from_items(extra_items or []),
+                )
+                input_items.extend(local_history_items)
         config = app_config_from_json(await self._repository.load_config_snapshot(session=session))
         profile = config.analysis.profiles[config.analysis.default_profile]
         system_instruction = config.prompt.system_instruction or DEFAULT_SYSTEM_INSTRUCTION
@@ -71,33 +79,35 @@ class ContextAssembler:
             source_refs.append(
                 {"type": "profile", "ref": f"profile:{profile.goal_file}", "hash": _sha256_text(profile.goal)}
             )
-        instruction_item, instruction_refs = await self._instruction_context(
-            session=session,
-            focus_paths=_extract_focus_paths(input_items),
-        )
-        if instruction_item is not None:
-            input_items.append(instruction_item)
-            source_refs.extend(instruction_refs)
+        if include_base_context and override_input_items is None:
+            instruction_item, instruction_refs = await self._instruction_context(
+                session=session,
+                focus_paths=_extract_focus_paths(input_items),
+            )
+            if instruction_item is not None:
+                input_items.append(instruction_item)
+                source_refs.extend(instruction_refs)
         payload = {
             "instructions": instructions,
             "input": input_items,
             "source_refs": source_refs,
         }
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
-        input_ref = f"agent-inputs/{session.agent_id}/{turn_id}.json"
-        self._storage.put_bytes(input_ref, encoded, content_type="application/json")
         response_tools = ToolRegistry.from_config(config.tools).response_tools()
         token_estimate = _estimate_tokens(payload)
-        await self._repository.save_context_assembly(
-            agent_id=session.agent_id,
-            turn_id=turn_id,
-            config_snapshot_id=session.config_snapshot_id,
-            source_refs_json=source_refs,
-            input_ref=input_ref,
-            instructions_hash=_sha256_text(instructions),
-            tool_schema_hash=_sha256_json(response_tools),
-            token_estimate=token_estimate,
-        )
+        input_ref = f"agent-inputs/{session.agent_id}/{turn_id}.json"
+        if persist:
+            encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+            self._storage.put_bytes(input_ref, encoded, content_type="application/json")
+            await self._repository.save_context_assembly(
+                agent_id=session.agent_id,
+                turn_id=turn_id,
+                config_snapshot_id=session.config_snapshot_id,
+                source_refs_json=source_refs,
+                input_ref=input_ref,
+                instructions_hash=_sha256_text(instructions),
+                tool_schema_hash=_sha256_json(response_tools),
+                token_estimate=token_estimate,
+            )
         return {
             "instructions": instructions,
             "input": input_items,
@@ -118,30 +128,14 @@ class ContextAssembler:
             context_items = [item for item in context_items if _context_item_call_id(item) not in exclude_call_ids]
         if not context_items:
             return []
-
-        replay_items: list[dict[str, Any]] = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": "\n".join(
-                            [
-                                "以下是本地持久化的模型可见历史, 用于在未使用 previous_response_id 时继续任务.",
-                                "不要重新开始; 不要重复已经完成的工具调用, 除非需要补充证据.",
-                                "HTTP 和 WebSocket 只是请求传输层; 这里的历史用于本地上下文重放.",
-                            ]
-                        ),
-                    }
-                ],
-            }
-        ]
+        replay_items = await self._context_manager.for_prompt(
+            session=session,
+            exclude_call_ids=exclude_call_ids,
+        )
         fallback_lines: list[str] = []
         for item in context_items:
             payload = item.get("payload_json")
-            if _is_replayable_context_payload(payload):
-                replay_items.append(payload)
-            else:
+            if not _is_replayable_context_payload(payload):
                 fallback_lines.append(
                     json.dumps(
                         {
@@ -309,7 +303,7 @@ def _is_replayable_context_payload(value: Any) -> TypeGuard[dict[str, Any]]:
         return False
     payload = cast(dict[str, Any], value)
     payload_type = payload.get("type")
-    if payload_type in {"function_call", "function_call_output", "reasoning"}:
+    if payload_type in {"compaction", "function_call", "function_call_output", "reasoning"}:
         return True
     if payload_type == "message":
         return payload.get("role") in {"assistant", "user", "developer", "system"}

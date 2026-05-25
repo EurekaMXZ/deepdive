@@ -6,7 +6,7 @@ from uuid import UUID
 
 from backend.agent.compaction import ContextCompactor
 from backend.agent.context import ContextAssembler
-from backend.agent.models import AgentSessionState, ModelResponse, ModelToolCall
+from backend.agent.models import AgentSessionState, CompactionDecision, ModelResponse, ModelToolCall
 from backend.agent.ports import AgentRepository, ResponsesRunner
 from backend.config import AppConfig
 from backend.events import EventEnvelope, EventType
@@ -80,7 +80,11 @@ class AgentCommandHandler:
             if recovered:
                 return
             if _is_retryable_model_turn(existing_turn):
-                await self._run_model_turn(event=event, session=session, turn_id=UUID(str(existing_turn["id"])))
+                await self._run_model_turn(
+                    event=event,
+                    session=session,
+                    turn_id=UUID(str(existing_turn["id"])),
+                )
                 return
             await self._fail_unrecoverable_turn_replay(
                 event=event, session=session, turn_id=UUID(str(existing_turn["id"]))
@@ -105,6 +109,11 @@ class AgentCommandHandler:
         if session.turn_count >= session.max_turns:
             await self._fail_max_turns_exceeded(event=event, session=session)
             return
+        ready_tool_outputs = None
+        if _is_terminal_tool_event(event):
+            ready_tool_outputs = await self._ready_tool_outputs(event)
+            if ready_tool_outputs is None:
+                return
         max_tool_calls = int(session.effective_limits_json.get("max_tool_calls") or 0)
         if max_tool_calls > 0 and await self._count_tool_calls(agent_id=session.agent_id) >= max_tool_calls:
             await self._fail_max_tool_calls_exceeded(event=event, session=session, max_tool_calls=max_tool_calls)
@@ -122,23 +131,61 @@ class AgentCommandHandler:
             trigger_event_id=event.event_id,
             trigger_domain_key=trigger_domain_key,
         )
-        await self._run_model_turn(event=event, session=session, turn_id=turn_id)
+        await self._run_model_turn(
+            event=event,
+            session=session,
+            turn_id=turn_id,
+            ready_tool_outputs=ready_tool_outputs,
+        )
 
-    async def _run_model_turn(self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID) -> None:
+    async def _run_model_turn(
+        self,
+        *,
+        event: EventEnvelope,
+        session: AgentSessionState,
+        turn_id: UUID,
+        ready_tool_outputs: list[dict[str, Any]] | None = None,
+    ) -> None:
         use_previous_response_id = bool(
             session.effective_runtime_json.get("use_previous_response_id", self._config.openai.use_previous_response_id)
         ) and bool(session.latest_response_id)
-        extra_items = await self._tool_output_items(event, use_previous_response_id=use_previous_response_id)
+        extra_items = await self._tool_output_items(
+            event,
+            use_previous_response_id=use_previous_response_id,
+            ready_tool_outputs=ready_tool_outputs,
+        )
         context = await self._context_assembler.assemble(
             session=session,
             turn_id=turn_id,
             extra_items=extra_items,
             include_local_history=not use_previous_response_id,
+            include_base_context=not use_previous_response_id,
         )
-        compacted = await self._compact_if_needed(event=event, session=session, context=context)
-        if compacted:
+        compaction_context = context
+        if use_previous_response_id:
+            compaction_context = await self._context_assembler.assemble(
+                session=session,
+                turn_id=turn_id,
+                extra_items=extra_items,
+                include_local_history=True,
+                include_base_context=True,
+                persist=False,
+            )
+        compaction = await self._compact_if_needed(event=event, session=session, turn_id=turn_id, context=compaction_context)
+        if compaction.strategy in {"remote", "remote_v2", "local_model"}:
             use_previous_response_id = False
-            extra_items = await self._tool_output_items(event, use_previous_response_id=False)
+            context = await self._context_assembler.assemble(
+                session=session,
+                turn_id=turn_id,
+                override_input_items=compaction.replacement_input or compaction.remote_output or [],
+            )
+        elif compaction.compacted:
+            use_previous_response_id = False
+            extra_items = await self._tool_output_items(
+                event,
+                use_previous_response_id=False,
+                ready_tool_outputs=ready_tool_outputs,
+            )
             context = await self._context_assembler.assemble(
                 session=session,
                 turn_id=turn_id,
@@ -229,12 +276,15 @@ class AgentCommandHandler:
             "service_tier": session.effective_runtime_json.get("service_tier", self._config.openai.service_tier),
             "on_raw_sse_event": on_raw_sse_event,
         }
+        context_management = self._context_management(session=session)
+        if context_management:
+            request["context_management"] = context_management
         if context.get("include"):
             request["include"] = context["include"]
-        if not compacted and use_previous_response_id:
+        if not compaction.compacted and use_previous_response_id:
             request["previous_response_id"] = session.latest_response_id
         try:
-            response = await self._responses_runner.create_response(request)
+            response = await self._create_response_with_optional_context_management(request)
         except CancelledModelStreamError:
             return
         except Exception as exc:
@@ -269,24 +319,35 @@ class AgentCommandHandler:
         output_ref = self._store_model_output(session=session, turn_id=turn_id, response=response)
 
         if response.tool_calls:
-            atomic_tool_call = getattr(self._repository, "complete_turn_with_tool_call", None)
-            await self._handle_tool_call(
+            max_tool_calls = int(session.effective_limits_json.get("max_tool_calls") or 0)
+            if max_tool_calls > 0:
+                current_tool_calls = await self._count_tool_calls(agent_id=session.agent_id)
+                if current_tool_calls + len(response.tool_calls) > max_tool_calls:
+                    await self._fail_max_tool_calls_exceeded(
+                        event=event,
+                        session=session,
+                        max_tool_calls=max_tool_calls,
+                    )
+                    return
+            atomic_tool_calls = getattr(self._repository, "complete_turn_with_tool_calls", None)
+            await self._handle_tool_calls(
                 event=event,
                 session=session,
                 turn_id=turn_id,
                 context=context,
-                tool_call=response.tool_calls[0],
+                tool_calls=response.tool_calls,
                 completed_turn={
                     "response_id": response.response_id,
                     "previous_response_id": session.latest_response_id,
                     "input_ref": context["input_ref"],
                     "output_ref": output_ref,
                     "usage": response.usage,
+                    "output_items": response.output_items,
                 }
-                if atomic_tool_call is not None
+                if atomic_tool_calls is not None
                 else None,
             )
-            if atomic_tool_call is None:
+            if atomic_tool_calls is None:
                 await self._repository.update_latest_response(
                     agent_id=session.agent_id, response_id=response.response_id
                 )
@@ -324,6 +385,7 @@ class AgentCommandHandler:
                 agent_id=session.agent_id,
                 output_text=response.output_text,
                 stream_payload={"status": "completed", "response_id": response.response_id, "output_ref": output_ref},
+                output_items=response.output_items,
                 event=completed_event,
                 final_delta_payload={"text": response.output_text} if response.output_text else None,
             )
@@ -390,22 +452,53 @@ class AgentCommandHandler:
         )
 
     async def _compact_if_needed(
-        self, *, event: EventEnvelope, session: AgentSessionState, context: dict[str, Any]
-    ) -> bool:
+        self, *, event: EventEnvelope, session: AgentSessionState, turn_id: UUID, context: dict[str, Any]
+    ) -> CompactionDecision:
         threshold = int(session.effective_limits_json.get("auto_compact_threshold_tokens") or 0)
         token_estimate = int(context.get("token_estimate") or 0)
         if threshold <= 0 or token_estimate <= threshold:
-            return False
+            return CompactionDecision()
+        remote_compaction = await self._try_remote_compact(
+            event=event,
+            session=session,
+            turn_id=turn_id,
+            context=context,
+            token_estimate=token_estimate,
+            threshold=threshold,
+        )
+        if remote_compaction is not None:
+            return remote_compaction
+        remote_compaction_v2 = await self._try_remote_compact_v2(
+            event=event,
+            session=session,
+            turn_id=turn_id,
+            context=context,
+            token_estimate=token_estimate,
+            threshold=threshold,
+        )
+        if remote_compaction_v2 is not None:
+            return remote_compaction_v2
+        local_model_compaction = await self._try_local_model_compact(
+            event=event,
+            session=session,
+            turn_id=turn_id,
+            context=context,
+            token_estimate=token_estimate,
+            threshold=threshold,
+        )
+        if local_model_compaction is not None:
+            return local_model_compaction
         context_items = await self._repository.load_uncompacted_context_items(agent_id=session.agent_id, limit=200)
         summary = await self._compactor.build_summary(session=session, context_items=context_items)
         focus_paths = list(summary.get("focus_paths") or [])
+        evidence_ids = list(summary.get("evidence_ids") or [])
         if context_items:
             await self._repository.compact_context_items(
                 agent_id=session.agent_id,
                 compacted_until_seq=max(int(item.get("seq") or 0) for item in context_items),
                 compacted_until_turn=session.turn_count,
                 summary_json=summary,
-                evidence_ids_json=[],
+                evidence_ids_json=evidence_ids,
                 focus_paths_json=focus_paths,
                 next_action=summary["next_action"],
             )
@@ -414,7 +507,7 @@ class AgentCommandHandler:
                 agent_id=session.agent_id,
                 compacted_until_turn=session.turn_count,
                 summary_json=summary,
-                evidence_ids_json=[],
+                evidence_ids_json=evidence_ids,
                 focus_paths_json=focus_paths,
                 next_action=summary["next_action"],
             )
@@ -422,7 +515,7 @@ class AgentCommandHandler:
             analysis_id=session.analysis_id,
             agent_id=session.agent_id,
             event_type="compact",
-            payload={"token_estimate": token_estimate, "threshold": threshold},
+            payload={"token_estimate": token_estimate, "threshold": threshold, "strategy": "local"},
             state="completed",
         )
         await self._repository.add_outbox(
@@ -433,19 +526,280 @@ class AgentCommandHandler:
                 snapshot_id=session.snapshot_id,
                 correlation_id=event.correlation_id,
                 causation_id=event.event_id,
-                payload={"token_estimate": token_estimate, "threshold": threshold},
+                payload={"token_estimate": token_estimate, "threshold": threshold, "strategy": "local"},
             )
         )
-        return True
+        return CompactionDecision(strategy="local")
+
+    async def _try_remote_compact(
+        self,
+        *,
+        event: EventEnvelope,
+        session: AgentSessionState,
+        turn_id: UUID,
+        context: dict[str, Any],
+        token_estimate: int,
+        threshold: int,
+    ) -> CompactionDecision | None:
+        try:
+            compaction = await self._responses_runner.compact_response(
+                {
+                    "model": session.effective_model,
+                    "input": context["input"],
+                }
+            )
+        except Exception:
+            return None
+        if not compaction.output:
+            return None
+        await self._repository.save_compacted_context_window(
+            agent_id=session.agent_id,
+            turn_id=turn_id,
+            compacted_until_turn=session.turn_count,
+            compaction_id=compaction.compaction_id,
+            output_json=compaction.output,
+            usage_json=compaction.usage,
+            strategy="remote",
+        )
+        payload = {
+            "token_estimate": token_estimate,
+            "threshold": threshold,
+            "strategy": "remote",
+            "compaction_id": compaction.compaction_id,
+        }
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="compact",
+            payload=payload,
+            turn_id=turn_id,
+            state="completed",
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.AGENT_COMPACTED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload=payload,
+            )
+        )
+        return CompactionDecision(strategy="remote", remote_output=compaction.output, replacement_input=compaction.output)
+
+    async def _try_remote_compact_v2(
+        self,
+        *,
+        event: EventEnvelope,
+        session: AgentSessionState,
+        turn_id: UUID,
+        context: dict[str, Any],
+        token_estimate: int,
+        threshold: int,
+    ) -> CompactionDecision | None:
+        request = {
+            "model": session.effective_model,
+            "instructions": context["instructions"],
+            "input": [*context["input"], _compaction_trigger_item()],
+            "tools": context["tool_schema"],
+            "parallel_tool_calls": bool(session.effective_runtime_json.get("parallel_tool_calls", False)),
+            "reasoning": {
+                "effort": session.effective_runtime_json.get(
+                    "reasoning_effort",
+                    self._config.openai.reasoning_effort,
+                )
+            },
+            "service_tier": session.effective_runtime_json.get("service_tier", self._config.openai.service_tier),
+            "metadata": {"purpose": "remote_compact_v2"},
+        }
+        if context.get("include"):
+            request["include"] = context["include"]
+        try:
+            response = await self._responses_runner.create_response(request)
+        except Exception:
+            return None
+        replacement_input = _remote_v2_replacement_input(context["input"], response)
+        if replacement_input is None:
+            return None
+        await self._repository.save_compacted_context_window(
+            agent_id=session.agent_id,
+            turn_id=turn_id,
+            compacted_until_turn=session.turn_count,
+            compaction_id=response.response_id,
+            output_json=replacement_input,
+            usage_json=response.usage,
+            strategy="remote_v2",
+        )
+        payload = {
+            "token_estimate": token_estimate,
+            "threshold": threshold,
+            "strategy": "remote_v2",
+            "compaction_id": response.response_id,
+        }
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="compact",
+            payload=payload,
+            turn_id=turn_id,
+            state="completed",
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.AGENT_COMPACTED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload=payload,
+            )
+        )
+        return CompactionDecision(strategy="remote_v2", replacement_input=replacement_input)
+
+    async def _try_local_model_compact(
+        self,
+        *,
+        event: EventEnvelope,
+        session: AgentSessionState,
+        turn_id: UUID,
+        context: dict[str, Any],
+        token_estimate: int,
+        threshold: int,
+    ) -> CompactionDecision | None:
+        request = {
+            "model": session.effective_model,
+            "instructions": _local_compaction_instructions(self._config),
+            "input": [
+                *context["input"],
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Compact the preceding DeepDive agent context into a concise, "
+                                "machine-resumable state. Preserve completed work, evidence ids, "
+                                "open questions, active assumptions, and the next concrete action."
+                            ),
+                        }
+                    ],
+                },
+            ],
+            "tools": [],
+            "parallel_tool_calls": False,
+            "reasoning": {"effort": session.effective_runtime_json.get("reasoning_effort", self._config.openai.reasoning_effort)},
+            "service_tier": session.effective_runtime_json.get("service_tier", self._config.openai.service_tier),
+            "metadata": {"purpose": "local_compact"},
+        }
+        try:
+            response = await self._responses_runner.create_response(request)
+        except Exception:
+            return None
+        if not response.output_text.strip() and not response.output_items:
+            return None
+        replacement_input = _local_model_replacement_input(response)
+        await self._repository.save_compacted_context_window(
+            agent_id=session.agent_id,
+            turn_id=turn_id,
+            compacted_until_turn=session.turn_count,
+            compaction_id=response.response_id,
+            output_json=replacement_input,
+            usage_json=response.usage,
+            strategy="local_model",
+        )
+        payload = {
+            "token_estimate": token_estimate,
+            "threshold": threshold,
+            "strategy": "local_model",
+            "compaction_id": response.response_id,
+        }
+        await self._repository.add_stream_event(
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+            event_type="compact",
+            payload=payload,
+            turn_id=turn_id,
+            state="completed",
+        )
+        await self._repository.add_outbox(
+            EventEnvelope.new(
+                event_type=EventType.AGENT_COMPACTED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload=payload,
+            )
+        )
+        return CompactionDecision(strategy="local_model", replacement_input=replacement_input)
 
     def _context_exceeds_threshold(self, *, session: AgentSessionState, context: dict[str, Any]) -> bool:
         threshold = int(session.effective_limits_json.get("auto_compact_threshold_tokens") or 0)
         token_estimate = int(context.get("token_estimate") or 0)
         return threshold > 0 and token_estimate > threshold
 
+    def _context_management(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
+        threshold = int(session.effective_limits_json.get("auto_compact_threshold_tokens") or 0)
+        if threshold <= 0:
+            return []
+        return [{"type": "compaction", "compact_threshold": threshold}]
+
+    async def _create_response_with_optional_context_management(self, request: dict[str, Any]) -> ModelResponse:
+        try:
+            return await self._responses_runner.create_response(request)
+        except Exception as exc:
+            if not _is_unsupported_context_management_error(exc) or "context_management" not in request:
+                raise
+            fallback_request = dict(request)
+            fallback_request.pop("context_management", None)
+            return await self._responses_runner.create_response(fallback_request)
+
     async def _tool_output_items(
-        self, event: EventEnvelope, *, use_previous_response_id: bool = False
+        self,
+        event: EventEnvelope,
+        *,
+        use_previous_response_id: bool = False,
+        ready_tool_outputs: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
+        outputs = ready_tool_outputs
+        if outputs is None:
+            outputs = await self._ready_tool_outputs(event)
+            if outputs is None:
+                return []
+        if not outputs:
+            return []
+        function_outputs = [
+            {
+                "type": "function_call_output",
+                "call_id": output["call_id"],
+                "output": output["output"],
+            }
+            for output in outputs
+        ]
+        if use_previous_response_id:
+            return function_outputs
+        output_ref = outputs[0].get("output_ref")
+        previous_items = self._previous_output_items(output_ref if isinstance(output_ref, str) else None)
+        if previous_items:
+            return [*previous_items, *function_outputs]
+        items: list[dict[str, Any]] = []
+        for output, function_output in zip(outputs, function_outputs, strict=True):
+            items.append(
+                {
+                    "type": "function_call",
+                    "call_id": output["call_id"],
+                    "name": output["name"],
+                    "arguments": json.dumps(output["arguments"], ensure_ascii=False),
+                }
+            )
+            items.append(function_output)
+        return items
+
+    async def _ready_tool_outputs(self, event: EventEnvelope) -> list[dict[str, Any]] | None:
         if event.event_type not in {
             EventType.TOOL_CALL_COMPLETED,
             EventType.TOOL_CALL_FAILED,
@@ -477,26 +831,14 @@ class AgentCommandHandler:
             }
         if output is None:
             return []
-        output_ref = output.get("output_ref")
-        function_output: dict[str, Any] = {
-            "type": "function_call_output",
-            "call_id": output["call_id"],
-            "output": output["output"],
-        }
-        if use_previous_response_id:
-            return [function_output]
-        previous_items = self._previous_output_items(output_ref if isinstance(output_ref, str) else None)
-        if previous_items:
-            return [*previous_items, function_output]
-        return [
-            {
-                "type": "function_call",
-                "call_id": output["call_id"],
-                "name": output["name"],
-                "arguments": json.dumps(output["arguments"], ensure_ascii=False),
-            },
-            function_output,
-        ]
+        turn_id = output.get("turn_id")
+        load_ready_tool_outputs = getattr(self._repository, "load_ready_tool_outputs_for_turn", None)
+        if turn_id is not None and load_ready_tool_outputs is not None:
+            ready_outputs = await load_ready_tool_outputs(turn_id=UUID(str(turn_id)))
+            if ready_outputs is None:
+                return None
+            return ready_outputs
+        return [output]
 
     def _previous_output_items(self, output_ref: str | None) -> list[dict[str, Any]]:
         if not output_ref:
@@ -627,6 +969,7 @@ class AgentCommandHandler:
                     input_ref=completed_turn["input_ref"],
                     output_ref=completed_turn["output_ref"],
                     usage=completed_turn["usage"],
+                    output_items=completed_turn.get("output_items"),
                     latest_response_agent_id=session.agent_id,
                     tool_call_kwargs=tool_call_kwargs,
                     analysis_id=session.analysis_id,
@@ -698,6 +1041,7 @@ class AgentCommandHandler:
                 input_ref=completed_turn["input_ref"],
                 output_ref=completed_turn["output_ref"],
                 usage=completed_turn["usage"],
+                output_items=completed_turn.get("output_items"),
                 latest_response_agent_id=session.agent_id,
                 tool_call_kwargs=tool_call_kwargs,
                 analysis_id=session.analysis_id,
@@ -731,6 +1075,136 @@ class AgentCommandHandler:
         await self._repository.update_session_status(agent_id=session.agent_id, status="waiting_tool")
         stream_payload["tool_call_id"] = str(tool_call_id)
         event_envelope.payload["tool_call_id"] = str(tool_call_id)
+
+    async def _handle_tool_calls(
+        self,
+        *,
+        event: EventEnvelope,
+        session: AgentSessionState,
+        turn_id: UUID,
+        context: dict[str, Any],
+        tool_calls: list[ModelToolCall],
+        completed_turn: dict[str, Any] | None = None,
+    ) -> None:
+        if completed_turn is None:
+            for tool_call in tool_calls:
+                await self._handle_tool_call(
+                    event=event,
+                    session=session,
+                    turn_id=turn_id,
+                    context=context,
+                    tool_call=tool_call,
+                    completed_turn=None,
+                )
+            return
+        tool_call_requests: list[dict[str, Any]] = []
+        for tool_call in tool_calls:
+            tool_call_requests.append(
+                await self._tool_call_request(
+                    event=event,
+                    session=session,
+                    turn_id=turn_id,
+                    context=context,
+                    tool_call=tool_call,
+                )
+            )
+        complete_turn_with_tool_calls = getattr(self._repository, "complete_turn_with_tool_calls", None)
+        if complete_turn_with_tool_calls is None:
+            raise RuntimeError("Repository does not support atomic batch tool calls")
+        await complete_turn_with_tool_calls(
+            turn_id=turn_id,
+            response_id=completed_turn["response_id"],
+            previous_response_id=completed_turn["previous_response_id"],
+            input_ref=completed_turn["input_ref"],
+            output_ref=completed_turn["output_ref"],
+            usage=completed_turn["usage"],
+            output_items=completed_turn.get("output_items"),
+            latest_response_agent_id=session.agent_id,
+            tool_call_requests=tool_call_requests,
+            analysis_id=session.analysis_id,
+            agent_id=session.agent_id,
+        )
+        await self._repository.update_session_status(agent_id=session.agent_id, status="waiting_tool")
+
+    async def _tool_call_request(
+        self,
+        *,
+        event: EventEnvelope,
+        session: AgentSessionState,
+        turn_id: UUID,
+        context: dict[str, Any],
+        tool_call: ModelToolCall,
+    ) -> dict[str, Any]:
+        if session.snapshot_id is None:
+            raise ValueError("Tool call requires snapshot_id")
+        previous_result = None
+        if _can_reuse_completed_tool_result(tool_call.name):
+            previous_result = await self._repository.find_completed_tool_call(
+                agent_id=session.agent_id,
+                tool_name=tool_call.name,
+                arguments_json=tool_call.arguments,
+            )
+        if previous_result is not None:
+            duplicate_result = _previous_tool_result_payload(tool_call=tool_call, previous_result=previous_result)
+            return {
+                "tool_call_kwargs": {
+                    "agent_id": session.agent_id,
+                    "turn_id": turn_id,
+                    "snapshot_id": session.snapshot_id,
+                    "openai_call_id": tool_call.call_id,
+                    "tool_name": tool_call.name,
+                    "arguments_json": tool_call.arguments,
+                    "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
+                    "tool_schema_hash": context["tool_schema_hash"],
+                    "tool_policy_hash": DEFAULT_TOOL_POLICY_HASH,
+                    "status": "completed",
+                    "result_summary": duplicate_result,
+                    "result_ref": previous_result.get("result_ref"),
+                },
+                "stream_event_type": "tool_result",
+                "stream_payload": duplicate_result,
+                "event": EventEnvelope.new(
+                    event_type=EventType.TOOL_CALL_COMPLETED,
+                    analysis_id=session.analysis_id,
+                    agent_id=session.agent_id,
+                    snapshot_id=session.snapshot_id,
+                    correlation_id=event.correlation_id,
+                    causation_id=event.event_id,
+                    payload={"previous_tool_call_id": str(previous_result["id"])},
+                ),
+            }
+        return {
+            "tool_call_kwargs": {
+                "agent_id": session.agent_id,
+                "turn_id": turn_id,
+                "snapshot_id": session.snapshot_id,
+                "openai_call_id": tool_call.call_id,
+                "tool_name": tool_call.name,
+                "arguments_json": tool_call.arguments,
+                "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
+                "tool_schema_hash": context["tool_schema_hash"],
+                "tool_policy_hash": DEFAULT_TOOL_POLICY_HASH,
+                "status": "queued",
+            },
+            "stream_event_type": "tool_call",
+            "stream_payload": {
+                "tool_name": tool_call.name,
+                "arguments": tool_call.arguments,
+            },
+            "event": EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_REQUESTED,
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                snapshot_id=session.snapshot_id,
+                correlation_id=event.correlation_id,
+                causation_id=event.event_id,
+                payload={
+                    "openai_call_id": tool_call.call_id,
+                    "tool_name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                },
+            ),
+        }
 
     def _store_model_output(self, *, session: AgentSessionState, turn_id: UUID, response: ModelResponse) -> str:
         return self._context_assembler.store_model_output(session=session, turn_id=turn_id, response=response)
@@ -960,6 +1434,64 @@ def _safe_error_message(exc: Exception) -> str:
     return message[:4096]
 
 
+def _local_compaction_instructions(config: AppConfig) -> str:
+    configured = (config.prompt.compaction_instruction or "").strip()
+    if configured:
+        return configured
+    return (
+        "You are compacting a DeepDive agent transcript. Return only the state needed to resume the task: "
+        "goal, completed steps, confirmed facts with evidence ids, active hypotheses, open questions, focus paths, "
+        "and next action. Do not restart the analysis."
+    )
+
+
+def _local_model_replacement_input(response: ModelResponse) -> list[dict[str, Any]]:
+    if response.output_items:
+        return list(response.output_items)
+    return [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Compacted DeepDive context state:\n" + response.output_text.strip(),
+                }
+            ],
+        }
+    ]
+
+
+def _remote_v2_replacement_input(
+    prompt_input: list[dict[str, Any]],
+    response: ModelResponse,
+) -> list[dict[str, Any]] | None:
+    output_items = response.output_items or []
+    compaction_items = [item for item in output_items if item.get("type") == "compaction"]
+    if len(compaction_items) != 1:
+        return None
+    retained = [_canonical_remote_v2_retained_message(item) for item in prompt_input if _is_remote_v2_retained_message(item)]
+    return [*retained, compaction_items[0]]
+
+
+def _is_remote_v2_retained_message(item: dict[str, Any]) -> bool:
+    if item.get("type") == "message":
+        return item.get("role") in {"user", "developer", "system"}
+    if item.get("type") is None and "role" in item:
+        return item.get("role") in {"user", "developer", "system"}
+    return False
+
+
+def _canonical_remote_v2_retained_message(item: dict[str, Any]) -> dict[str, Any]:
+    if item.get("type") == "message":
+        return dict(item)
+    return {"type": "message", **item}
+
+
+def _compaction_trigger_item() -> dict[str, str]:
+    return {"type": "compaction_trigger"}
+
+
 def _previous_tool_result_payload(*, tool_call: ModelToolCall, previous_result: dict[str, Any]) -> dict[str, Any]:
     result_summary = previous_result.get("result_summary")
     if isinstance(result_summary, str):
@@ -1016,6 +1548,25 @@ def _is_retryable_model_exception(exc: Exception) -> bool:
         "504",
     )
     return any(marker in message for marker in retryable_markers)
+
+
+def _is_unsupported_context_management_error(exc: Exception) -> bool:
+    message = _safe_error_message(exc).lower()
+    return "context_management" in message and any(
+        marker in message
+        for marker in (
+            "unknown",
+            "unsupported",
+            "unrecognized",
+            "invalid",
+            "unexpected",
+            "not supported",
+        )
+    )
+
+
+def _is_terminal_tool_event(event: EventEnvelope) -> bool:
+    return event.event_type in {EventType.TOOL_CALL_COMPLETED, EventType.TOOL_CALL_FAILED, EventType.TOOL_CALL_DENIED}
 
 
 def _trigger_domain_key(event: EventEnvelope) -> str | None:

@@ -47,6 +47,9 @@ from backend.execution.tool_registry import (
 from backend.execution.tool_registry import (
     ToolRegistry as ToolRegistry,
 )
+from backend.execution.tool_registry import (
+    is_parallel_safe_tool as is_parallel_safe_tool,
+)
 from backend.ids import new_uuid7
 from backend.security import is_secret_path
 from backend.storage import ObjectStorage, evidence_key, tool_result_key

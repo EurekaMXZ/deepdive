@@ -3,12 +3,14 @@ from __future__ import annotations
 from typing import Any, Protocol
 from uuid import UUID
 
-from backend.agent.models import AgentSessionState, ModelResponse
+from backend.agent.models import AgentSessionState, CompactionResponse, ModelResponse
 from backend.events import EventEnvelope
 
 
 class ResponsesRunner(Protocol):
     async def create_response(self, request: dict[str, Any]) -> ModelResponse: ...
+
+    async def compact_response(self, request: dict[str, Any]) -> CompactionResponse: ...
 
 
 class ContextAssemblyRepository(Protocol):
@@ -59,6 +61,18 @@ class AgentContextItemRepository(Protocol):
         evidence_ids_json: list[Any],
         focus_paths_json: list[str],
         next_action: str | None,
+    ) -> None: ...
+
+    async def save_compacted_context_window(
+        self,
+        *,
+        agent_id: UUID,
+        turn_id: UUID,
+        compacted_until_turn: int,
+        compaction_id: str,
+        output_json: list[dict[str, Any]],
+        usage_json: dict[str, int],
+        strategy: str = "remote",
     ) -> None: ...
 
 
@@ -121,6 +135,22 @@ class AgentToolCallRepository(Protocol):
         event: EventEnvelope,
     ) -> UUID: ...
 
+    async def complete_turn_with_tool_calls(
+        self,
+        *,
+        turn_id: UUID,
+        response_id: str,
+        previous_response_id: str | None,
+        input_ref: str,
+        output_ref: str,
+        usage: dict[str, int],
+        latest_response_agent_id: UUID,
+        tool_call_requests: list[dict[str, Any]],
+        analysis_id: UUID,
+        agent_id: UUID,
+        output_items: list[dict[str, Any]] | None = None,
+    ) -> list[UUID]: ...
+
     async def find_completed_tool_call(
         self, *, agent_id: UUID, tool_name: str, arguments_json: dict[str, Any]
     ) -> dict[str, Any] | None: ...
@@ -128,6 +158,8 @@ class AgentToolCallRepository(Protocol):
     async def count_tool_calls(self, *, agent_id: UUID) -> int: ...
 
     async def get_pending_tool_output(self, *, tool_call_id: UUID) -> dict[str, Any] | None: ...
+
+    async def load_ready_tool_outputs_for_turn(self, *, turn_id: UUID) -> list[dict[str, Any]] | None: ...
 
     async def has_turn_for_event(self, *, agent_id: UUID, event_id: UUID) -> bool: ...
 

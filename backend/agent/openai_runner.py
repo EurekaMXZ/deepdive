@@ -10,7 +10,7 @@ from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol, cast
 
-from backend.agent import ModelResponse, ModelToolCall
+from backend.agent import CompactionResponse, ModelResponse, ModelToolCall
 from backend.events.model_stream_payloads import (
     completed_response_stream_payload,
     model_reasoning_summary_stream_payloads,
@@ -165,6 +165,30 @@ class OpenAIResponsesRunner:
             for future in pending_stream_writes:
                 future.cancel()
             raise
+
+    async def compact_response(self, request: dict[str, Any]) -> CompactionResponse:
+        return await asyncio.to_thread(self._compact_response_sync, request)
+
+    def _compact_response_sync(self, request: dict[str, Any]) -> CompactionResponse:
+        body = dict(request)
+        url = self.base_url.rstrip("/") + "/responses/compact"
+        http_request = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode(),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": self.user_agent,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(http_request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read().decode())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            raise RuntimeError(f"OpenAI Responses compact API failed: {exc.code} {detail}") from exc
+        return parse_compaction_payload(payload)
 
     def _create_response_sync_with_cancel(
         self,
@@ -498,6 +522,19 @@ def parse_response_payload(payload: dict[str, Any]) -> ModelResponse:
             "total_tokens": int(usage.get("total_tokens", 0) or 0),
         },
         output_items=output_items,
+    )
+
+
+def parse_compaction_payload(payload: dict[str, Any]) -> CompactionResponse:
+    usage = _object_or_empty(payload.get("usage"))
+    return CompactionResponse(
+        compaction_id=str(payload.get("id") or ""),
+        output=_object_list(payload.get("output")),
+        usage={
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+        },
     )
 
 

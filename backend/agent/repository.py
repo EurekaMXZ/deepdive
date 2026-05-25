@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from backend.agent import AgentSessionState
 from backend.agent.context_items import (
     ASSISTANT_OUTPUT_ITEM_TYPE,
+    COMPACTION_ITEM_TYPE,
     FUNCTION_CALL_ITEM_TYPE,
     FUNCTION_CALL_OUTPUT_ITEM_TYPE,
     MODEL_CONTEXT_SOURCE,
@@ -17,9 +18,12 @@ from backend.agent.context_items import (
     append_context_item_on_connection,
     assistant_output_idempotency_key,
     assistant_output_payload,
+    canonical_model_item_idempotency_key,
+    canonical_model_item_type,
     function_call_output_payload,
     function_call_payload,
     model_function_call_idempotency_key,
+    remote_compaction_idempotency_key,
     tool_output_idempotency_key,
 )
 from backend.agent.repository_context import AgentContextStore
@@ -192,11 +196,15 @@ class PostgresAgentRepository:
                 text(
                     """
                     SELECT seq, item_type, payload_json, source, response_id
-                    FROM agent_context_items
-                    WHERE agent_id = :agent_id
-                      AND compacted_at IS NULL
-                    ORDER BY seq
-                    LIMIT :limit
+                    FROM (
+                        SELECT seq, item_type, payload_json, source, response_id
+                        FROM agent_context_items
+                        WHERE agent_id = :agent_id
+                          AND compacted_at IS NULL
+                        ORDER BY seq DESC
+                        LIMIT :limit
+                    ) AS recent
+                    ORDER BY recent.seq
                     """
                 ),
                 {"agent_id": agent_id, "limit": limit},
@@ -280,6 +288,27 @@ class PostgresAgentRepository:
             source=source,
             idempotency_key=idempotency_key,
         )
+
+    async def _append_model_output_items_on_connection(
+        self,
+        connection: AsyncDbConnection,
+        *,
+        agent_id: UUID,
+        turn_id: UUID | None,
+        response_id: str,
+        output_items: list[dict[str, Any]],
+    ) -> None:
+        for item in output_items:
+            await self._append_context_item_on_connection(
+                connection,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                item_type=canonical_model_item_type(item),
+                payload=item,
+                response_id=response_id,
+                source=MODEL_CONTEXT_SOURCE,
+                idempotency_key=canonical_model_item_idempotency_key(item, response_id=response_id),
+            )
 
     async def _add_stream_event_on_connection(
         self,
@@ -466,6 +495,7 @@ class PostgresAgentRepository:
         agent_id: UUID,
         stream_event_type: str,
         stream_payload: dict[str, Any],
+        output_items: list[dict[str, Any]] | None = None,
         event: EventEnvelope,
     ) -> UUID:
         async with self._connection() as connection:
@@ -486,20 +516,29 @@ class PostgresAgentRepository:
                 usage=usage,
             )
             tool_call_id = await self._create_tool_call_on_connection(connection, **tool_call_kwargs)
-            await self._append_context_item_on_connection(
-                connection,
-                agent_id=agent_id,
-                turn_id=turn_id,
-                item_type=FUNCTION_CALL_ITEM_TYPE,
-                payload=function_call_payload(
-                    call_id=context_tool_call_kwargs["openai_call_id"],
-                    name=context_tool_call_kwargs["tool_name"],
-                    arguments=context_tool_call_kwargs["arguments_json"],
-                ),
-                response_id=response_id,
-                source=MODEL_CONTEXT_SOURCE,
-                idempotency_key=model_function_call_idempotency_key(context_tool_call_kwargs["openai_call_id"]),
-            )
+            if output_items:
+                await self._append_model_output_items_on_connection(
+                    connection,
+                    agent_id=agent_id,
+                    turn_id=turn_id,
+                    response_id=response_id,
+                    output_items=output_items,
+                )
+            else:
+                await self._append_context_item_on_connection(
+                    connection,
+                    agent_id=agent_id,
+                    turn_id=turn_id,
+                    item_type=FUNCTION_CALL_ITEM_TYPE,
+                    payload=function_call_payload(
+                        call_id=context_tool_call_kwargs["openai_call_id"],
+                        name=context_tool_call_kwargs["tool_name"],
+                        arguments=context_tool_call_kwargs["arguments_json"],
+                    ),
+                    response_id=response_id,
+                    source=MODEL_CONTEXT_SOURCE,
+                    idempotency_key=model_function_call_idempotency_key(context_tool_call_kwargs["openai_call_id"]),
+                )
             if (
                 context_tool_call_kwargs.get("status") == "completed"
                 and context_tool_call_kwargs.get("result_summary") is not None
@@ -533,6 +572,101 @@ class PostgresAgentRepository:
             await DbOutboxSink(connection).add(event)
         return tool_call_id
 
+    async def complete_turn_with_tool_calls(
+        self,
+        *,
+        turn_id: UUID,
+        response_id: str,
+        previous_response_id: str | None,
+        input_ref: str,
+        output_ref: str,
+        usage: dict[str, int],
+        latest_response_agent_id: UUID,
+        tool_call_requests: list[dict[str, Any]],
+        analysis_id: UUID,
+        agent_id: UUID,
+        output_items: list[dict[str, Any]] | None = None,
+    ) -> list[UUID]:
+        async with self._connection() as connection:
+            can_create = await self._lock_continuable_session(connection, analysis_id=analysis_id, agent_id=agent_id)
+            if not can_create:
+                raise RuntimeError("Cannot request tool calls for terminal or cancelling analysis")
+            await self._update_latest_response_on_connection(
+                connection, agent_id=latest_response_agent_id, response_id=response_id
+            )
+            await self._complete_turn_on_connection(
+                connection,
+                turn_id=turn_id,
+                response_id=response_id,
+                previous_response_id=previous_response_id,
+                input_ref=input_ref,
+                output_ref=output_ref,
+                usage=usage,
+            )
+            tool_call_ids: list[UUID] = []
+            for request in tool_call_requests:
+                tool_call_kwargs = dict(request["tool_call_kwargs"])
+                tool_call_id = await self._create_tool_call_on_connection(connection, **tool_call_kwargs)
+                tool_call_ids.append(tool_call_id)
+            if output_items:
+                await self._append_model_output_items_on_connection(
+                    connection,
+                    agent_id=agent_id,
+                    turn_id=turn_id,
+                    response_id=response_id,
+                    output_items=output_items,
+                )
+            else:
+                for request in tool_call_requests:
+                    tool_call_kwargs = dict(request["tool_call_kwargs"])
+                    await self._append_context_item_on_connection(
+                        connection,
+                        agent_id=agent_id,
+                        turn_id=turn_id,
+                        item_type=FUNCTION_CALL_ITEM_TYPE,
+                        payload=function_call_payload(
+                            call_id=tool_call_kwargs["openai_call_id"],
+                            name=tool_call_kwargs["tool_name"],
+                            arguments=tool_call_kwargs["arguments_json"],
+                        ),
+                        response_id=response_id,
+                        source=MODEL_CONTEXT_SOURCE,
+                        idempotency_key=model_function_call_idempotency_key(tool_call_kwargs["openai_call_id"]),
+                    )
+            for index, request in enumerate(tool_call_requests):
+                tool_call_id = tool_call_ids[index]
+                tool_call_kwargs = dict(request["tool_call_kwargs"])
+                if tool_call_kwargs.get("status") == "completed" and tool_call_kwargs.get("result_summary") is not None:
+                    await self._append_context_item_on_connection(
+                        connection,
+                        agent_id=agent_id,
+                        turn_id=turn_id,
+                        item_type=FUNCTION_CALL_OUTPUT_ITEM_TYPE,
+                        payload=function_call_output_payload(
+                            call_id=tool_call_kwargs["openai_call_id"],
+                            output=_json_or_none(tool_call_kwargs.get("result_summary")) or "{}",
+                        ),
+                        response_id=None,
+                        source=TOOL_CONTEXT_SOURCE,
+                        idempotency_key=tool_output_idempotency_key(tool_call_kwargs["openai_call_id"]),
+                    )
+                payload = dict(request["stream_payload"])
+                payload["tool_call_id"] = str(tool_call_id)
+                await self._add_stream_event_on_connection(
+                    connection,
+                    analysis_id=analysis_id,
+                    agent_id=agent_id,
+                    event_type=request["stream_event_type"],
+                    payload=payload,
+                    turn_id=turn_id,
+                    response_id=response_id,
+                    state="completed",
+                )
+                event = request["event"]
+                event.payload["tool_call_id"] = str(tool_call_id)
+                await DbOutboxSink(connection).add(event)
+        return tool_call_ids
+
     async def complete_turn_with_final_answer(
         self,
         *,
@@ -548,6 +682,7 @@ class PostgresAgentRepository:
         output_text: str,
         stream_payload: dict[str, Any],
         event: EventEnvelope,
+        output_items: list[dict[str, Any]] | None = None,
         final_delta_payload: dict[str, Any] | None = None,
         final_output_payload: dict[str, Any] | None = None,
     ) -> bool:
@@ -592,7 +727,15 @@ class PostgresAgentRepository:
             )
             if int(getattr(result, "rowcount", 0) or 0) <= 0:
                 return False
-            if output_text:
+            if output_items:
+                await self._append_model_output_items_on_connection(
+                    connection,
+                    agent_id=agent_id,
+                    turn_id=turn_id,
+                    response_id=response_id,
+                    output_items=output_items,
+                )
+            elif output_text:
                 await self._append_context_item_on_connection(
                     connection,
                     agent_id=agent_id,
@@ -724,7 +867,8 @@ class PostgresAgentRepository:
             result = await connection.execute(
                 text(
                     """
-                    SELECT tc.openai_call_id, tc.tool_name, tc.arguments_json, tc.result_summary, at.output_ref
+                    SELECT tc.id, tc.turn_id, tc.openai_call_id, tc.tool_name, tc.arguments_json,
+                           tc.result_summary, at.output_ref
                     FROM tool_calls tc
                     JOIN agent_turns at ON at.id = tc.turn_id
                     WHERE tc.id = :tool_call_id
@@ -737,12 +881,58 @@ class PostgresAgentRepository:
         if row is None:
             return None
         return {
+            "id": row["id"],
+            "turn_id": row["turn_id"],
             "call_id": row["openai_call_id"],
             "name": row["tool_name"],
             "arguments": row["arguments_json"],
             "output": row["result_summary"] or "{}",
             "output_ref": row["output_ref"],
         }
+
+    async def load_ready_tool_outputs_for_turn(self, *, turn_id: UUID) -> list[dict[str, Any]] | None:
+        async with self._connection() as connection:
+            pending_count = await connection.scalar(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM tool_calls
+                    WHERE turn_id = :turn_id
+                      AND status IN ('queued', 'validating', 'running')
+                    """
+                ),
+                {"turn_id": turn_id},
+            )
+            if int(pending_count or 0) > 0:
+                return None
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT tc.id, tc.turn_id, tc.openai_call_id, tc.tool_name, tc.arguments_json,
+                           tc.result_summary, at.output_ref
+                    FROM tool_calls tc
+                    JOIN agent_turns at ON at.id = tc.turn_id
+                    WHERE tc.turn_id = :turn_id
+                      AND tc.status IN ('completed', 'failed', 'denied')
+                    ORDER BY tc.created_at, tc.id
+                    """
+                ),
+                {"turn_id": turn_id},
+            )
+        outputs: list[dict[str, Any]] = []
+        for row in result.mappings().all():
+            outputs.append(
+                {
+                    "id": row["id"],
+                    "turn_id": row["turn_id"],
+                    "call_id": row["openai_call_id"],
+                    "name": row["tool_name"],
+                    "arguments": row["arguments_json"],
+                    "output": row["result_summary"] or "{}",
+                    "output_ref": row["output_ref"],
+                }
+            )
+        return outputs
 
     async def complete_analysis(self, *, analysis_id: UUID, agent_id: UUID, output_text: str) -> bool:
         now = datetime.now(UTC)
@@ -884,6 +1074,81 @@ class PostgresAgentRepository:
                     "created_at": now,
                 },
             )
+
+    async def save_compacted_context_window(
+        self,
+        *,
+        agent_id: UUID,
+        turn_id: UUID,
+        compacted_until_turn: int,
+        compaction_id: str,
+        output_json: list[dict[str, Any]],
+        usage_json: dict[str, int],
+        strategy: str = "remote",
+    ) -> None:
+        now = datetime.now(UTC)
+        async with self._connection() as connection:
+            await connection.execute(
+                text(
+                    """
+                    UPDATE agent_context_items
+                    SET compacted_at = :compacted_at
+                    WHERE agent_id = :agent_id
+                      AND compacted_at IS NULL
+                    """
+                ),
+                {"agent_id": agent_id, "compacted_at": now},
+            )
+            generation = await connection.scalar(
+                text(
+                    """
+                    SELECT COALESCE(MAX(generation), 0) + 1
+                    FROM agent_context_windows
+                    WHERE agent_id = :agent_id
+                    """
+                ),
+                {"agent_id": agent_id},
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO agent_context_windows (
+                        id, agent_id, turn_id, generation, strategy, compaction_id,
+                        compacted_until_turn, output_json, usage_json, created_at
+                    )
+                    VALUES (
+                        :id, :agent_id, :turn_id, :generation, :strategy, :compaction_id,
+                        :compacted_until_turn, :output_json, :usage_json, :created_at
+                    )
+                    """
+                ).bindparams(
+                    bindparam("output_json", type_=JSONB),
+                    bindparam("usage_json", type_=JSONB),
+                ),
+                {
+                    "id": new_uuid7(),
+                    "agent_id": agent_id,
+                    "turn_id": turn_id,
+                    "generation": int(generation or 1),
+                    "strategy": strategy,
+                    "compaction_id": compaction_id,
+                    "compacted_until_turn": compacted_until_turn,
+                    "output_json": output_json,
+                    "usage_json": usage_json,
+                    "created_at": now,
+                },
+            )
+            for item_index, item in enumerate(output_json):
+                await self._append_context_item_on_connection(
+                    connection,
+                    agent_id=agent_id,
+                    turn_id=turn_id,
+                    item_type=str(item.get("type") or COMPACTION_ITEM_TYPE),
+                    payload=item,
+                    response_id=compaction_id,
+                    source=MODEL_CONTEXT_SOURCE,
+                    idempotency_key=remote_compaction_idempotency_key(compaction_id, item_index),
+                )
 
     async def add_outbox(self, event: EventEnvelope) -> None:
         async with self._connection() as connection:

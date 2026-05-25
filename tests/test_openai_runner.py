@@ -75,6 +75,49 @@ class OpenAIRunnerTest(unittest.TestCase):
 
         self.assertEqual(captured_bodies[0]["previous_response_id"], "resp_1")
 
+    def test_http_runner_compacts_response_window(self) -> None:
+        captured_requests = []
+        compacted_output = [
+            {
+                "id": "msg_1",
+                "type": "message",
+                "status": "completed",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}],
+            },
+            {"id": "cmp_1", "type": "compaction", "encrypted_content": "opaque"},
+        ]
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            captured_requests.append(request)
+            return FakeJsonResponse(
+                {
+                    "id": "cmp_resp_1",
+                    "object": "response.compaction",
+                    "output": compacted_output,
+                    "usage": {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+                }
+            )
+
+        runner = OpenAIResponsesRunner(api_key="test-key", base_url="https://api.example.test/v1")
+
+        with patch("backend.agent.openai_runner.urllib.request.urlopen", fake_urlopen):
+            response = runner._compact_response_sync(
+                {
+                    "model": "gpt-5.5",
+                    "input": [{"role": "user", "content": "long"}],
+                }
+            )
+
+        self.assertEqual(captured_requests[0].full_url, "https://api.example.test/v1/responses/compact")
+        sent = json.loads(captured_requests[0].data.decode())
+        self.assertEqual(sent["model"], "gpt-5.5")
+        self.assertEqual(sent["input"], [{"role": "user", "content": "long"}])
+        self.assertEqual(response.compaction_id, "cmp_resp_1")
+        self.assertEqual(response.output, compacted_output)
+        self.assertEqual(response.usage["total_tokens"], 13)
+
     def test_websocket_runner_sends_response_create_event_and_parses_completed_response(self) -> None:
         websocket = FakeWebSocket(
             [

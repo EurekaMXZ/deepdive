@@ -29,6 +29,7 @@ from backend.execution import (
     ToolCapability,
     ToolExecutionContext,
     ToolRegistry,
+    is_parallel_safe_tool,
 )
 from backend.execution.repository import PostgresToolCallRepository
 from backend.ids import new_uuid7
@@ -102,15 +103,25 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(definitions["list_files"].capability, ToolCapability.SOURCE_READ)
         self.assertTrue(definitions["list_files"].read_only)
         self.assertTrue(definitions["list_files"].idempotent)
+        self.assertTrue(definitions["list_files"].parallel_safe)
         self.assertEqual(definitions["web_search"].capability, ToolCapability.EXTERNAL_NETWORK)
         self.assertTrue(definitions["web_search"].read_only)
         self.assertFalse(definitions["web_search"].idempotent)
+        self.assertFalse(definitions["web_search"].parallel_safe)
         self.assertEqual(definitions["document_create"].capability, ToolCapability.ARTIFACT_WRITE)
         self.assertFalse(definitions["document_create"].read_only)
         self.assertFalse(definitions["document_create"].idempotent)
+        self.assertFalse(definitions["document_create"].parallel_safe)
         self.assertTrue(definitions["document_create"].requires_analysis_id)
         self.assertEqual(definitions["document_get"].capability, ToolCapability.ARTIFACT_READ)
         self.assertTrue(definitions["document_get"].requires_analysis_id)
+        self.assertTrue(definitions["document_get"].parallel_safe)
+
+    def test_parallel_safety_lookup_defaults_unknown_tools_to_exclusive(self) -> None:
+        self.assertTrue(is_parallel_safe_tool("read_file"))
+        self.assertTrue(is_parallel_safe_tool("search_text"))
+        self.assertFalse(is_parallel_safe_tool("document_update"))
+        self.assertFalse(is_parallel_safe_tool("missing_tool"))
 
     def test_permission_result_includes_tool_policy_metadata(self) -> None:
         result = PermissionEngine().evaluate_result(
@@ -2283,6 +2294,125 @@ class PostgresToolCallRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.finalized[0]["status"], "cancelled")
         self.assertEqual(repository.finalized[0]["claim_owner"], repository.claim_owner)
 
+    async def test_execution_handler_allows_parallel_safe_tools_to_overlap(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        first_tool_call_id = new_uuid7()
+        second_tool_call_id = new_uuid7()
+        repository = MultiToolCallRepository(
+            {
+                first_tool_call_id: {
+                    "id": first_tool_call_id,
+                    "agent_id": agent_id,
+                    "snapshot_id": snapshot_id,
+                    "tool_name": "read_file",
+                    "arguments_json": {"path": "README.md"},
+                },
+                second_tool_call_id: {
+                    "id": second_tool_call_id,
+                    "agent_id": agent_id,
+                    "snapshot_id": snapshot_id,
+                    "tool_name": "search_file",
+                    "arguments_json": {"query": "README"},
+                },
+            }
+        )
+        executor = GateExecutor()
+        handler = ExecutionCommandHandler(tool_calls=repository, executor=executor)
+
+        first_task = asyncio.create_task(
+            handler(
+                EventEnvelope.new(
+                    event_type=EventType.TOOL_CALL_REQUESTED,
+                    analysis_id=analysis_id,
+                    agent_id=agent_id,
+                    snapshot_id=snapshot_id,
+                    payload={"tool_call_id": str(first_tool_call_id)},
+                )
+            )
+        )
+        await executor.wait_started(1)
+        second_task = asyncio.create_task(
+            handler(
+                EventEnvelope.new(
+                    event_type=EventType.TOOL_CALL_REQUESTED,
+                    analysis_id=analysis_id,
+                    agent_id=agent_id,
+                    snapshot_id=snapshot_id,
+                    payload={"tool_call_id": str(second_tool_call_id)},
+                )
+            )
+        )
+        await executor.wait_started(2)
+        executor.release_all()
+        await asyncio.gather(first_task, second_task)
+
+        self.assertEqual(set(executor.started_tools), {"read_file", "search_file"})
+
+    async def test_execution_handler_serializes_exclusive_tools_against_parallel_safe_tools(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        first_tool_call_id = new_uuid7()
+        second_tool_call_id = new_uuid7()
+        repository = MultiToolCallRepository(
+            {
+                first_tool_call_id: {
+                    "id": first_tool_call_id,
+                    "agent_id": agent_id,
+                    "snapshot_id": snapshot_id,
+                    "tool_name": "read_file",
+                    "arguments_json": {"path": "README.md"},
+                },
+                second_tool_call_id: {
+                    "id": second_tool_call_id,
+                    "agent_id": agent_id,
+                    "snapshot_id": snapshot_id,
+                    "tool_name": "document_update",
+                    "arguments_json": {
+                        "document_id": str(new_uuid7()),
+                        "expected_version": 1,
+                        "content": "# Updated",
+                    },
+                },
+            }
+        )
+        executor = GateExecutor()
+        handler = ExecutionCommandHandler(tool_calls=repository, executor=executor)
+
+        first_task = asyncio.create_task(
+            handler(
+                EventEnvelope.new(
+                    event_type=EventType.TOOL_CALL_REQUESTED,
+                    analysis_id=analysis_id,
+                    agent_id=agent_id,
+                    snapshot_id=snapshot_id,
+                    payload={"tool_call_id": str(first_tool_call_id)},
+                )
+            )
+        )
+        await executor.wait_started(1)
+        second_task = asyncio.create_task(
+            handler(
+                EventEnvelope.new(
+                    event_type=EventType.TOOL_CALL_REQUESTED,
+                    analysis_id=analysis_id,
+                    agent_id=agent_id,
+                    snapshot_id=snapshot_id,
+                    payload={"tool_call_id": str(second_tool_call_id)},
+                )
+            )
+        )
+        await asyncio.sleep(0.01)
+        self.assertEqual(executor.started_tools, ["read_file"])
+        executor.release_one()
+        await executor.wait_started(2)
+        executor.release_all()
+        await asyncio.gather(first_task, second_task)
+
+        self.assertEqual(executor.started_tools, ["read_file", "document_update"])
+
 
 class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_glob_like_pattern_escapes_sql_wildcards(self) -> None:
@@ -2677,6 +2807,100 @@ class FakeToolCallRepository:
             }
         )
         return True if self.finalize_result is None else self.finalize_result
+
+
+class MultiToolCallRepository:
+    def __init__(self, rows: dict) -> None:
+        self.rows = {tool_call_id: dict(row) for tool_call_id, row in rows.items()}
+        self.claim_owner = "multi-claim-owner"
+        self.finalized: list[dict] = []
+        self.outbox_events: list[EventEnvelope] = []
+
+    async def claim_queued_tool_call(self, tool_call_id):
+        row = self.rows.get(tool_call_id)
+        if row is None:
+            return None
+        row = dict(row)
+        row.setdefault("claim_owner", self.claim_owner)
+        return row
+
+    async def get_analysis_status(self, analysis_id):
+        del analysis_id
+        return "running"
+
+    async def renew_tool_call_claim(self, *, tool_call_id, claim_owner):
+        del tool_call_id
+        return claim_owner == self.claim_owner
+
+    async def release_tool_call_claim(self, *, tool_call_id, claim_owner):
+        del tool_call_id
+        return claim_owner == self.claim_owner
+
+    async def get_tool_call(self, tool_call_id):
+        return self.rows.get(tool_call_id)
+
+    async def add_outbox(self, event):
+        self.outbox_events.append(event)
+
+    async def finalize_tool_call(
+        self,
+        *,
+        analysis_id,
+        agent_id,
+        tool_call_id,
+        status,
+        result,
+        result_ref=None,
+        duration_ms,
+        permission_decision,
+        error_code,
+        error_message,
+        claim_owner=None,
+        event,
+    ):
+        self.finalized.append(
+            {
+                "analysis_id": analysis_id,
+                "agent_id": agent_id,
+                "tool_call_id": tool_call_id,
+                "status": status,
+                "result": result,
+                "result_ref": result_ref,
+                "duration_ms": duration_ms,
+                "permission_decision": permission_decision,
+                "error_code": error_code,
+                "error_message": error_message,
+                "claim_owner": claim_owner,
+                "event": event,
+            }
+        )
+        return True
+
+
+class GateExecutor:
+    def __init__(self) -> None:
+        self.started_tools: list[str] = []
+        self._started = asyncio.Condition()
+        self._release_queue: asyncio.Queue[None] = asyncio.Queue()
+
+    async def execute(self, context, tool_name: str, arguments: dict, **kwargs):
+        del context, arguments, kwargs
+        async with self._started:
+            self.started_tools.append(tool_name)
+            self._started.notify_all()
+        await self._release_queue.get()
+        return {"ok": True, "tool_name": tool_name}
+
+    async def wait_started(self, count: int) -> None:
+        async with self._started:
+            await asyncio.wait_for(self._started.wait_for(lambda: len(self.started_tools) >= count), timeout=1)
+
+    def release_one(self) -> None:
+        self._release_queue.put_nowait(None)
+
+    def release_all(self) -> None:
+        for _ in range(10):
+            self._release_queue.put_nowait(None)
 
 
 class CountingExecutor:

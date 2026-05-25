@@ -17,6 +17,7 @@ TOOL_CONTEXT_SOURCE = "tool"
 FUNCTION_CALL_ITEM_TYPE = "function_call"
 FUNCTION_CALL_OUTPUT_ITEM_TYPE = "function_call_output"
 ASSISTANT_OUTPUT_ITEM_TYPE = "assistant_output"
+COMPACTION_ITEM_TYPE = "compaction"
 
 
 def function_call_payload(*, call_id: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -54,6 +55,24 @@ def tool_output_idempotency_key(call_id: str) -> str:
 
 def assistant_output_idempotency_key(response_id: str) -> str:
     return f"model:assistant_output:{response_id}"
+
+
+def remote_compaction_idempotency_key(compaction_id: str, item_index: int) -> str:
+    return f"model:remote_compaction:{compaction_id}:{item_index}"
+
+
+def canonical_model_item_type(payload: dict[str, Any]) -> str:
+    return str(payload.get("type") or "model_output")
+
+
+def canonical_model_item_idempotency_key(payload: dict[str, Any], *, response_id: str) -> str:
+    item_type = canonical_model_item_type(payload)
+    if item_type == FUNCTION_CALL_ITEM_TYPE and isinstance(payload.get("call_id"), str):
+        return model_function_call_idempotency_key(str(payload["call_id"]))
+    item_id = payload.get("id")
+    if isinstance(item_id, str) and item_id:
+        return f"model:{item_type}:{item_id}"
+    return f"model:{item_type}:{response_id}"
 
 
 async def append_context_item_on_connection(

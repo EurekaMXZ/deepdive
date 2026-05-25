@@ -24,6 +24,7 @@ class ToolDefinition:
     read_only: bool = True
     idempotent: bool = True
     requires_analysis_id: bool = False
+    parallel_safe: bool = True
 
 
 TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
@@ -52,6 +53,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         "Search the public web through the configured Tavily Search API.",
         ToolCapability.EXTERNAL_NETWORK,
         idempotent=False,
+        parallel_safe=False,
     ),
     "document_create": ToolDefinition(
         "document_create",
@@ -60,6 +62,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         read_only=False,
         idempotent=False,
         requires_analysis_id=True,
+        parallel_safe=False,
     ),
     "document_get": ToolDefinition(
         "document_get",
@@ -74,6 +77,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         read_only=False,
         idempotent=False,
         requires_analysis_id=True,
+        parallel_safe=False,
     ),
     "document_delete": ToolDefinition(
         "document_delete",
@@ -82,6 +86,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         read_only=False,
         idempotent=False,
         requires_analysis_id=True,
+        parallel_safe=False,
     ),
     "document_finalize": ToolDefinition(
         "document_finalize",
@@ -90,8 +95,14 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         read_only=False,
         idempotent=False,
         requires_analysis_id=True,
+        parallel_safe=False,
     ),
 }
+
+
+def is_parallel_safe_tool(tool_name: str) -> bool:
+    definition = TOOL_DEFINITIONS.get(tool_name)
+    return bool(definition.parallel_safe) if definition is not None else False
 
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
