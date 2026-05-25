@@ -54,6 +54,46 @@ class DatabaseMigrationTest(unittest.TestCase):
                 with self.subTest(table=table_name, column=column_name):
                     self.assertRegex(body, rf"\b{column_name}\s+jsonb\b")
 
+    def test_migration_creates_referenced_tables_before_dependents(self) -> None:
+        sql = _migration_sql()
+        required_order = [
+            ("tenants", "users"),
+            ("users", "user_credentials"),
+            ("tenants", "analysis_repositories"),
+            ("users", "analysis_repositories"),
+            ("analyses", "analysis_repositories"),
+            ("agent_sessions", "agent_turns"),
+            ("agent_sessions", "agent_stream_events"),
+            ("agent_turns", "agent_stream_events"),
+            ("agent_sessions", "agent_context_items"),
+            ("agent_turns", "agent_context_items"),
+            ("agent_sessions", "agent_context_windows"),
+            ("agent_turns", "agent_context_windows"),
+            ("agent_sessions", "tool_calls"),
+            ("agent_turns", "tool_calls"),
+            ("analyses", "agent_todo_lists"),
+            ("agent_sessions", "agent_todo_lists"),
+            ("agent_turns", "agent_todo_lists"),
+            ("tool_calls", "agent_todo_lists"),
+            ("agent_sessions", "context_assemblies"),
+            ("agent_turns", "context_assemblies"),
+            ("agent_sessions", "evidence"),
+            ("tool_calls", "evidence"),
+            ("analyses", "documents"),
+            ("agent_sessions", "documents"),
+            ("documents", "document_nodes"),
+            ("documents", "document_revisions"),
+            ("tool_calls", "document_revisions"),
+            ("documents", "document_sections"),
+            ("documents", "document_section_revisions"),
+            ("document_sections", "document_section_revisions"),
+            ("document_revisions", "document_section_revisions"),
+        ]
+
+        for referenced, dependent in required_order:
+            with self.subTest(referenced=referenced, dependent=dependent):
+                self.assertLess(_create_table_position(sql, referenced), _create_table_position(sql, dependent))
+
     def test_migration_defines_replay_idempotency_and_snapshot_constraints(self) -> None:
         sql = _migration_sql()
 
@@ -291,6 +331,13 @@ def _create_table_body(sql: str, table_name: str) -> str:
     if match is None:
         raise AssertionError(f"CREATE TABLE statement not found for {table_name}")
     return match.group(1)
+
+
+def _create_table_position(sql: str, table_name: str) -> int:
+    match = re.search(rf"\bcreate\s+table\s+{table_name}\b", sql)
+    if match is None:
+        raise AssertionError(f"CREATE TABLE statement not found for {table_name}")
+    return match.start()
 
 
 def _normalize_sql(sql: str) -> str:

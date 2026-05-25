@@ -238,31 +238,6 @@ CREATE TABLE agent_context_windows (
     created_at timestamptz not null
 );
 
-CREATE TABLE agent_todo_lists (
-    id uuid primary key default uuidv7(),
-    analysis_id uuid not null references analyses(id),
-    agent_id uuid not null references agent_sessions(id),
-    turn_id uuid references agent_turns(id),
-    tool_call_id uuid not null references tool_calls(id),
-    version integer not null,
-    items_json jsonb not null,
-    note text,
-    created_at timestamptz not null
-);
-
-CREATE TABLE context_assemblies (
-    id uuid primary key default uuidv7(),
-    agent_id uuid not null references agent_sessions(id),
-    turn_id uuid not null references agent_turns(id),
-    config_snapshot_id uuid not null,
-    source_refs_json jsonb not null,
-    input_ref text not null,
-    instructions_hash text not null,
-    tool_schema_hash text not null,
-    token_estimate integer,
-    created_at timestamptz not null
-);
-
 CREATE TABLE tool_calls (
     id uuid primary key default uuidv7(),
     agent_id uuid not null references agent_sessions(id),
@@ -286,6 +261,31 @@ CREATE TABLE tool_calls (
     claim_owner text,
     created_at timestamptz not null,
     completed_at timestamptz
+);
+
+CREATE TABLE agent_todo_lists (
+    id uuid primary key default uuidv7(),
+    analysis_id uuid not null references analyses(id),
+    agent_id uuid not null references agent_sessions(id),
+    turn_id uuid references agent_turns(id),
+    tool_call_id uuid not null references tool_calls(id),
+    version integer not null,
+    items_json jsonb not null,
+    note text,
+    created_at timestamptz not null
+);
+
+CREATE TABLE context_assemblies (
+    id uuid primary key default uuidv7(),
+    agent_id uuid not null references agent_sessions(id),
+    turn_id uuid not null references agent_turns(id),
+    config_snapshot_id uuid not null,
+    source_refs_json jsonb not null,
+    input_ref text not null,
+    instructions_hash text not null,
+    tool_schema_hash text not null,
+    token_estimate integer,
+    created_at timestamptz not null
 );
 
 CREATE TABLE evidence (
