@@ -10,6 +10,23 @@ from backend.config import app_config_from_json, load_app_config_from_env, load_
 
 
 class EnvConfigTest(unittest.TestCase):
+    def test_env_example_documents_analysis_batch_scheduler_worker_settings(self) -> None:
+        env_example = Path(".env.example").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "ANALYSIS_BATCH_SCHEDULER_WORKER_GROUP=deepdive-analysis-batch-scheduler-worker",
+            env_example,
+        )
+        self.assertIn("ANALYSIS_BATCH_SCHEDULER_WORKER_MAX_MESSAGES=1", env_example)
+        self.assertIn("ANALYSIS_BATCH_SCHEDULER_WORKER_RUN_FOREVER=true", env_example)
+        self.assertIn("ANALYSIS_BATCH_SCHEDULER_WORKER_IDLE_SLEEP_SECONDS=1", env_example)
+        self.assertIn("ANALYSIS_BATCH_SCHEDULER_WORKER_ERROR_BACKOFF_SECONDS=5", env_example)
+        self.assertIn("ANALYSIS_BATCH_SCHEDULER_WORKER_MAX_ATTEMPTS=3", env_example)
+        self.assertIn(
+            "ANALYSIS_BATCH_SCHEDULER_WORKER_EVENT_HEARTBEAT_INTERVAL_SECONDS=60",
+            env_example,
+        )
+
     def test_load_dotenv_writes_missing_environment_variables(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             env_file = Path(tmpdir) / ".env"

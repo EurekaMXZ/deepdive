@@ -8,11 +8,23 @@ COMPOSE_PATH = Path("docker-compose.yml")
 
 
 class ComposeConfigTest(unittest.TestCase):
+    def test_app_profile_runs_analysis_batch_scheduler_worker(self) -> None:
+        compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("analysis-batch-scheduler-worker:", compose)
+        self.assertIn("container_name: deepdive-analysis-batch-scheduler-worker", compose)
+        self.assertIn(
+            'command: ["python", "-m", "backend.workers.batch_scheduler_runtime"]',
+            compose,
+        )
+        self.assertIn('profiles: ["app"]', compose)
+        self.assertIn('ANALYSIS_BATCH_SCHEDULER_WORKER_RUN_FOREVER: "true"', compose)
+
     def test_app_services_database_url_uses_postgres_environment_variables(self) -> None:
         compose = COMPOSE_PATH.read_text(encoding="utf-8")
         urls = re.findall(r"DATABASE_URL:\s+(.+)", compose)
 
-        self.assertGreaterEqual(len(urls), 6)
+        self.assertGreaterEqual(len(urls), 7)
         for value in urls:
             with self.subTest(database_url=value):
                 self.assertIn("${POSTGRES_USER:-deepdive}", value)

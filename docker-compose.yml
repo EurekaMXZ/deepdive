@@ -191,6 +191,25 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  analysis-batch-scheduler-worker:
+    profiles: ["app"]
+    build:
+      context: .
+    container_name: deepdive-analysis-batch-scheduler-worker
+    command: ["python", "-m", "backend.workers.batch_scheduler_runtime"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepdive}:${POSTGRES_PASSWORD:-deepdive}@postgres:5432/${POSTGRES_DB:-deepdive}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      ANALYSIS_BATCH_SCHEDULER_WORKER_RUN_FOREVER: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
   snapshot-worker:
     profiles: ["app"]
     build:
