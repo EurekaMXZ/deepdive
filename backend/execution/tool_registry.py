@@ -66,7 +66,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "document_create": ToolDefinition(
         "document_create",
-        "Create one focused markdown analysis document artifact, optionally under a document tree folder.",
+        "Create one focused markdown analysis document artifact under the most specific nested folder in the document tree.",
         ToolCapability.ARTIFACT_WRITE,
         read_only=False,
         idempotent=False,
@@ -75,7 +75,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "document_folder_create": ToolDefinition(
         "document_folder_create",
-        "Create a folder node in the analysis document tree.",
+        "Create a nested folder node in the analysis document tree; use parent_node_id to build domain and subsystem levels.",
         ToolCapability.ARTIFACT_WRITE,
         read_only=False,
         idempotent=False,

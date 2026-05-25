@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from fnmatch import fnmatchcase
 
-SECRET_PATH_POLICY_VERSION = "secret-paths-v3"
+SECRET_PATH_POLICY_VERSION = "secret-paths-v4"
+
+SAFE_ENV_TEMPLATE_NAMES = {
+    ".env.defaults",
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+}
 
 SECRET_PATH_NAMES = {
     ".env",
@@ -66,7 +73,15 @@ def visible_path_sql(*, path_column: str = "path", name_column: str = "name") ->
                       AND {path_column} <> '.env.local'
                       AND {path_column} <> '.env.development'
                       AND {path_column} <> '.env.production'
-                      AND {path_column} NOT LIKE '.env.%'
+                      AND (
+                          lower({name_column}) NOT LIKE '.env.%'
+                          OR lower({name_column}) IN (
+                              '.env.defaults',
+                              '.env.example',
+                              '.env.sample',
+                              '.env.template'
+                          )
+                      )
                       AND {path_column} <> '.git-credentials'
                       AND {path_column} <> '.npmrc'
                       AND {path_column} <> '.pypirc'
@@ -121,6 +136,8 @@ def is_secret_path(path: str) -> bool:
         return False
     lower_parts = [part.lower() for part in parts]
     name = lower_parts[-1]
+    if name in SAFE_ENV_TEMPLATE_NAMES:
+        return False
     if name in SECRET_PATH_NAMES:
         return True
     if name.startswith(".env."):

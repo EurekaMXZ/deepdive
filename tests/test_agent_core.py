@@ -1562,6 +1562,11 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("local repository evidence is insufficient", context["instructions"])
         self.assertIn("use web search tools to supplement", context["instructions"])
         self.assertIn("multiple focused documents arranged in a document tree", context["instructions"])
+        self.assertIn("create nested folder levels", context["instructions"])
+        self.assertIn("domain folder -> subsystem folder -> focused document", context["instructions"])
+        self.assertIn("meticulous and comprehensive", context["instructions"])
+        self.assertIn("cover every material component", context["instructions"])
+        self.assertIn("do not omit important findings", context["instructions"])
         self.assertIn("multiple structured sections", context["instructions"])
         self.assertNotIn("Use only the provided read-only tools", context["instructions"])
 
@@ -3067,7 +3072,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 latest_response_id=None,
                 turn_count=3,
                 max_turns=10,
-                effective_limits_json={"auto_compact_threshold_tokens": 350},
+                effective_limits_json={"auto_compact_threshold_tokens": 500},
                 effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
             ),
             turn_id=new_uuid7(),

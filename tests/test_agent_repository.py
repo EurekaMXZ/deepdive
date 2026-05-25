@@ -53,6 +53,8 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
             row_batches=[
                 [
                     {"path": ".env"},
+                    {"path": ".env.example"},
+                    {"path": "frontend/.env.example"},
                     {"path": ".docker/config.json"},
                     {"path": "private.pem"},
                     {"path": "src/app.py"},
@@ -67,11 +69,15 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         tree_item = next(item for item in items if "当前 snapshot 的文件树摘要" in item["content"][0]["text"])
         tree_text = tree_item["content"][0]["text"]
         self.assertIn("src/app.py", tree_text)
-        self.assertNotIn(".env", tree_text)
+        self.assertIn(".env.example", tree_text)
+        self.assertIn("frontend/.env.example", tree_text)
+        tree_paths = set(tree_text.splitlines()[1:])
+        self.assertNotIn(".env", tree_paths)
         self.assertNotIn(".docker/config.json", tree_text)
         self.assertNotIn("private.pem", tree_text)
         tree_sql = str(connection.executed[0][0])
         self.assertIn("path <> '.env'", tree_sql)
+        self.assertIn("'.env.example'", tree_sql)
         self.assertIn("lower(path) NOT LIKE '%.pem'", tree_sql)
 
     async def test_load_context_items_includes_latest_todo_snapshot(self) -> None:

@@ -108,6 +108,8 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("expected_version", tools["document_update"]["parameters"]["required"])
         self.assertTrue(tools["document_create"]["description"].startswith("Create"))
+        self.assertIn("most specific nested folder", tools["document_create"]["description"])
+        self.assertIn("nested folder node", tools["document_folder_create"]["description"])
 
     def test_tool_registry_rejects_unknown_enabled_tools(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown enabled tools: missing_tool"):
@@ -652,6 +654,43 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "SECRET_PATH_DENIED")
 
+    async def test_read_file_allows_env_example_template(self) -> None:
+        storage = CountingStorage()
+        storage.put_bytes("blob/env-example", b"DATABASE_URL=postgres://example\n", content_type="text/plain")
+        executor = SourceToolExecutor(
+            repository=FakeToolRepository(
+                files=[
+                    _file(
+                        ".env.example",
+                        None,
+                        ".env.example",
+                        "file",
+                        content_key="blob/env-example",
+                        content_hash="sha256:env-example",
+                        line_count=1,
+                        size_bytes=32,
+                    )
+                ]
+            ),
+            storage=storage,
+            cache=LocalSourceCache(root_dir=Path(tempfile.mkdtemp())),
+            permission_engine=PermissionEngine(),
+        )
+
+        result = await executor.execute(
+            ToolExecutionContext(
+                tool_call_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+            ),
+            "read_file",
+            {"path": ".env.example"},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["result"]["path"], ".env.example")
+        self.assertEqual(result["result"]["content"], "DATABASE_URL=postgres://example\n")
+
     async def test_read_file_denies_high_confidence_secret_paths(self) -> None:
         executor = SourceToolExecutor(
             repository=FakeToolRepository(files=[]),
@@ -838,6 +877,8 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         repository = FakeToolRepository(
             files=[
                 _file(".env", None, ".env", "file"),
+                _file(".env.example", None, ".env.example", "file"),
+                _file("frontend/.env.example", "frontend", ".env.example", "file"),
                 _file(".git/config", ".git", "config", "file"),
                 _file("credentials.json", None, "credentials.json", "file"),
                 _file("src/app.py", "src", "app.py", "file"),
@@ -860,9 +901,15 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         credentials_search = await executor.execute(context, "search_file", {"query": "credentials", "max_results": 10})
 
         self.assertTrue(listed["ok"])
-        self.assertEqual([item["path"] for item in listed["result"]["items"]], ["src/app.py"])
+        self.assertEqual(
+            [item["path"] for item in listed["result"]["items"]],
+            [".env.example", "frontend/.env.example", "src/app.py"],
+        )
         self.assertTrue(env_search["ok"])
-        self.assertEqual(env_search["result"]["items"], [])
+        self.assertEqual(
+            [item["path"] for item in env_search["result"]["items"]],
+            [".env.example", "frontend/.env.example"],
+        )
         self.assertTrue(credentials_search["ok"])
         self.assertEqual(credentials_search["result"]["items"], [])
 
@@ -2604,6 +2651,7 @@ class PostgresSnapshotToolRepositoryTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("path <> '.git'", sql)
             self.assertIn("path NOT LIKE '.git/%'", sql)
             self.assertIn("path <> '.env'", sql)
+            self.assertIn("'.env.example'", sql)
             self.assertIn("lower(path) NOT LIKE '%.pem'", sql)
 
     async def test_recursive_list_files_escapes_prefix_wildcards(self) -> None:

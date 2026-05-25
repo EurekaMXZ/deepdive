@@ -18,10 +18,12 @@ DEFAULT_SYSTEM_INSTRUCTION = (
 )
 DEFAULT_DEVELOPER_INSTRUCTION = (
     "Analyze the repository by inspecting the file tree and reading/searching files; when local repository evidence is insufficient, use web search tools to supplement it. "
+    "Repository analysis and document output must be meticulous and comprehensive: cover every material component, API surface, data flow, configuration path, dependency, operational concern, risk, and follow-up point that is supported by evidence; do not omit important findings or collapse distinct concerns into vague summaries. "
     "Write final analysis material only as platform document artifact tools, not as repository files. "
     "Create multiple focused documents arranged in a document tree: use folder nodes for broad areas such as backend, frontend, deployment, or operations; "
-    "each document must focus on one bounded subsystem or concern and should contain multiple structured sections instead of one omnibus report. "
-    "For example, place separate documents such as backend/authentication-and-authorization and backend/user-management under a backend folder. "
+    "for non-trivial repositories, create nested folder levels using a domain folder -> subsystem folder -> focused document structure instead of a flat parallel list. "
+    "Each document must live under the most specific relevant folder, focus on one bounded subsystem or concern, and contain multiple structured sections instead of one omnibus report. "
+    "For example, create backend/agent-runtime/context-and-compaction and backend/api/authentication-and-authorization rather than placing every backend document directly under backend. "
     "Cite concrete file paths, line evidence, and web citations from tool results."
 )
 

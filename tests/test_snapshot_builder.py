@@ -176,6 +176,34 @@ class SnapshotBuilderTest(unittest.TestCase):
         self.assertIsNone(files[0].content_key)
         self.assertEqual(storage.objects, {})
 
+    def test_scanner_keeps_env_example_templates_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkout_dir = Path(tmpdir)
+            (checkout_dir / ".env.example").write_bytes(b"DATABASE_URL=postgres://example\n")
+            storage = InMemoryObjectStorage()
+
+            files, instructions = SnapshotScanner().scan(
+                snapshot_id=new_uuid7(),
+                checkout_dir=checkout_dir,
+                tree_entries=[
+                    GitTreeEntry(
+                        mode="100644",
+                        kind="blob",
+                        oid="a" * 40,
+                        size=32,
+                        path=".env.example",
+                    )
+                ],
+                policy=SnapshotPolicy(max_file_bytes=1024),
+                storage=storage,
+            )
+
+        self.assertEqual(instructions, [])
+        self.assertEqual(files[0].path, ".env.example")
+        self.assertFalse(files[0].is_large)
+        self.assertIsNotNone(files[0].content_key)
+        self.assertEqual(storage.objects[files[0].content_key], b"DATABASE_URL=postgres://example\n")
+
     def test_scanner_records_high_confidence_secret_files_as_metadata_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             checkout_dir = Path(tmpdir)
