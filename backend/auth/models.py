@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+ACCESS_TOKEN_TTL_SECONDS = 24 * 60 * 60
+
 
 @dataclass
 class PermissionRecord:
@@ -46,7 +48,7 @@ class TokenPair:
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-    expires_in: int = 1800
+    expires_in: int = ACCESS_TOKEN_TTL_SECONDS
 
 
 @dataclass(frozen=True)

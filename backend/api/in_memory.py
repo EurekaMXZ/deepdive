@@ -6,7 +6,14 @@ from typing import Protocol
 from uuid import UUID
 
 from backend.api.pagination import cursor_offset, decode_list_cursor
-from backend.api.records import AgentStreamEventRecord, AnalysisRecord, RepositorySearchRecord
+from backend.api.records import (
+    AgentStreamEventRecord,
+    AnalysisBatchCreateItem,
+    AnalysisBatchItemRecord,
+    AnalysisBatchRecord,
+    AnalysisRecord,
+    RepositorySearchRecord,
+)
 from backend.api.repository_query import parse_repository_suggestion_query
 from backend.api.repository_search import (
     RepositoryIndexEntry,
@@ -32,6 +39,7 @@ class InMemoryAnalysisService:
 
     def __init__(self, *, outbox: OutboxSink | None = None) -> None:
         self._records: dict[UUID, AnalysisRecord] = {}
+        self._batches: dict[UUID, AnalysisBatchRecord] = {}
         self._outbox = outbox or NullOutboxSink()
 
     def create(
@@ -71,6 +79,75 @@ class InMemoryAnalysisService:
             )
         )
         return record
+
+    def create_batch(
+        self,
+        *,
+        items: list[AnalysisBatchCreateItem],
+        max_parallel: int,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> AnalysisBatchRecord:
+        now = datetime.now(UTC)
+        batch_id = new_uuid7()
+        batch_items: list[AnalysisBatchItemRecord] = []
+        for sort_order, item in enumerate(items):
+            record = AnalysisRecord(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=None,
+                status="queued",
+                repository_url=item.repository_url,
+                requested_ref=item.requested_ref,
+                resolved_commit_sha=None,
+                created_at=now,
+                updated_at=now,
+                tenant_id=tenant_id,
+                created_by_user_id=created_by_user_id,
+            )
+            self._records[record.analysis_id] = record
+            batch_items.append(
+                AnalysisBatchItemRecord(
+                    batch_item_id=new_uuid7(),
+                    batch_id=batch_id,
+                    analysis_id=record.analysis_id,
+                    agent_id=record.agent_id,
+                    repository_url=record.repository_url,
+                    requested_ref=record.requested_ref,
+                    status="pending",
+                    sort_order=sort_order,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+        batch = AnalysisBatchRecord(
+            batch_id=batch_id,
+            status="queued",
+            max_parallel=max_parallel,
+            total_count=len(batch_items),
+            pending_count=len(batch_items),
+            active_count=0,
+            completed_count=0,
+            failed_count=0,
+            cancelled_count=0,
+            created_at=now,
+            updated_at=now,
+            items=batch_items,
+            tenant_id=tenant_id,
+            created_by_user_id=created_by_user_id,
+        )
+        self._batches[batch_id] = batch
+        self._outbox.add(
+            EventEnvelope.new(
+                event_type=EventType.ANALYSIS_BATCH_SUBMITTED,
+                payload={
+                    "batch_id": str(batch.batch_id),
+                    "max_parallel": batch.max_parallel,
+                },
+            )
+        )
+        return batch
 
     def search_repositories(
         self,

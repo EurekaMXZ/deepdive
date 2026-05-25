@@ -60,6 +60,18 @@ class EventLayerTest(unittest.TestCase):
 
             self.assertEqual(event_topic(event), "deepdive.agent.commands")
 
+    def test_batch_scheduler_events_route_to_batch_scheduler_commands(self) -> None:
+        for event_type in (
+            EventType.ANALYSIS_BATCH_SUBMITTED,
+            EventType.ANALYSIS_BATCH_SLOT_AVAILABLE,
+            EventType.ANALYSIS_COMPLETED,
+            EventType.ANALYSIS_FAILED,
+            EventType.ANALYSIS_CANCELLED,
+        ):
+            event = EventEnvelope.new(event_type=event_type, analysis_id=new_uuid7())
+
+            self.assertEqual(event_topic(event), "deepdive.analysis-batch.commands")
+
 
 if __name__ == "__main__":
     unittest.main()

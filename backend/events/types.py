@@ -4,6 +4,8 @@ from enum import StrEnum
 
 
 class EventType(StrEnum):
+    ANALYSIS_BATCH_SUBMITTED = "AnalysisBatchSubmitted"
+    ANALYSIS_BATCH_SLOT_AVAILABLE = "AnalysisBatchSlotAvailable"
     ANALYSIS_REQUESTED = "AnalysisRequested"
     ANALYSIS_CANCEL_REQUESTED = "AnalysisCancelRequested"
     SNAPSHOT_REQUESTED = "SnapshotRequested"

@@ -62,6 +62,11 @@ class DatabaseMigrationTest(unittest.TestCase):
             ("tenants", "analysis_repositories"),
             ("users", "analysis_repositories"),
             ("analyses", "analysis_repositories"),
+            ("tenants", "analysis_batches"),
+            ("users", "analysis_batches"),
+            ("analysis_batches", "analysis_batch_items"),
+            ("analyses", "analysis_batch_items"),
+            ("agent_sessions", "analysis_batch_items"),
             ("agent_sessions", "agent_turns"),
             ("agent_sessions", "agent_stream_events"),
             ("agent_turns", "agent_stream_events"),
@@ -180,12 +185,26 @@ class DatabaseMigrationTest(unittest.TestCase):
         )
         analyses_body = _create_table_body(sql, "analyses")
         analysis_repositories_body = _create_table_body(sql, "analysis_repositories")
+        analysis_batches_body = _create_table_body(sql, "analysis_batches")
+        analysis_batch_items_body = _create_table_body(sql, "analysis_batch_items")
         self.assertRegex(analyses_body, r"\bcreated_by_user_id\s+uuid\b")
         self.assertRegex(analysis_repositories_body, r"\brepository_label\s+text\s+not\s+null\b")
         self.assertRegex(analysis_repositories_body, r"\bsearch_text\s+text\s+not\s+null\b")
         self.assertRegex(analysis_repositories_body, r"\blatest_analysis_id\s+uuid\s+not\s+null\b")
         self.assertRegex(analysis_repositories_body, r"\banalysis_count\s+integer\s+not\s+null\b")
         self.assertRegex(analysis_repositories_body, r"\bcompleted_analysis_count\s+integer\s+not\s+null\b")
+        self.assertRegex(analysis_batches_body, r"\bmax_parallel\s+integer\s+not\s+null\b")
+        self.assertRegex(analysis_batches_body, r"\bpending_count\s+integer\s+not\s+null\b")
+        self.assertRegex(analysis_batches_body, r"\bactive_count\s+integer\s+not\s+null\b")
+        self.assertRegex(analysis_batch_items_body, r"\banalysis_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(analysis_batch_items_body, r"\bagent_id\s+uuid\s+not\s+null\b")
+        self.assertRegex(analysis_batch_items_body, r"\bstatus\s+text\s+not\s+null\b")
+        self.assertRegex(analysis_batch_items_body, r"\bsort_order\s+integer\s+not\s+null\b")
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_analysis_batch_items_analysis\s+on\s+analysis_batch_items"
+            r"\s+\(analysis_id\)",
+        )
         self.assertRegex(
             sql,
             r"create\s+unique\s+index\s+uq_users_tenant_email\s+on\s+users\s+\(tenant_id,\s*email\)",
@@ -277,6 +296,9 @@ class DatabaseMigrationTest(unittest.TestCase):
             "ix_analysis_repositories_scope_recent": "analysis_repositories",
             "ix_analysis_repositories_label_trgm": "analysis_repositories",
             "ix_analysis_repositories_text_trgm": "analysis_repositories",
+            "ix_analysis_batches_tenant_user_created": "analysis_batches",
+            "ix_analysis_batch_items_batch_status_sort": "analysis_batch_items",
+            "ix_analysis_batch_items_batch_analysis": "analysis_batch_items",
             "ix_users_tenant_created_at": "users",
             "ix_refresh_tokens_user_expires_at": "refresh_tokens",
             "ix_audit_log_tenant_created_at": "audit_log",

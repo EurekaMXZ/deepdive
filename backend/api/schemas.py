@@ -7,6 +7,21 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 
+def validate_repository_url(value: HttpUrl) -> HttpUrl:
+    if value.username or value.password:
+        raise ValueError("repository_url must not contain credentials")
+    parsed = urlsplit(str(value))
+    if parsed.query or parsed.fragment:
+        raise ValueError("repository_url must not contain query or fragment")
+    return value
+
+
+def validate_analysis_profile_id(value: UUID | None) -> UUID | None:
+    if value is not None:
+        raise ValueError("analysis_profile_id is not supported until backend profile registry is enabled")
+    return value
+
+
 class AnalysisCreateRequest(BaseModel):
     repository_url: HttpUrl
     ref: str = Field(min_length=1)
@@ -15,19 +30,33 @@ class AnalysisCreateRequest(BaseModel):
     @field_validator("repository_url")
     @classmethod
     def reject_repository_url_credentials(cls, value: HttpUrl) -> HttpUrl:
-        if value.username or value.password:
-            raise ValueError("repository_url must not contain credentials")
-        parsed = urlsplit(str(value))
-        if parsed.query or parsed.fragment:
-            raise ValueError("repository_url must not contain query or fragment")
-        return value
+        return validate_repository_url(value)
 
     @field_validator("analysis_profile_id")
     @classmethod
     def reject_unregistered_profile_id(cls, value: UUID | None) -> UUID | None:
-        if value is not None:
-            raise ValueError("analysis_profile_id is not supported until backend profile registry is enabled")
-        return value
+        return validate_analysis_profile_id(value)
+
+
+class AnalysisBatchCreateItemRequest(BaseModel):
+    repository_url: HttpUrl
+    ref: str = Field(min_length=1)
+    analysis_profile_id: UUID | None = None
+
+    @field_validator("repository_url")
+    @classmethod
+    def reject_repository_url_credentials(cls, value: HttpUrl) -> HttpUrl:
+        return validate_repository_url(value)
+
+    @field_validator("analysis_profile_id")
+    @classmethod
+    def reject_unregistered_profile_id(cls, value: UUID | None) -> UUID | None:
+        return validate_analysis_profile_id(value)
+
+
+class AnalysisBatchCreateRequest(BaseModel):
+    items: list[AnalysisBatchCreateItemRequest] = Field(min_length=1, max_length=100)
+    max_parallel: int = Field(ge=1, le=20)
 
 
 class AnalysisResponse(BaseModel):
@@ -52,6 +81,35 @@ class AnalysisCreateResponse(BaseModel):
     snapshot_id: UUID | None
     status: str
     created_at: datetime
+
+
+class AnalysisBatchItemResponse(BaseModel):
+    batch_item_id: UUID
+    analysis_id: UUID
+    agent_id: UUID
+    repository_url: str
+    requested_ref: str
+    status: str
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class AnalysisBatchCreateResponse(BaseModel):
+    batch_id: UUID
+    status: str
+    max_parallel: int
+    total_count: int
+    pending_count: int
+    active_count: int
+    completed_count: int
+    failed_count: int
+    cancelled_count: int
+    created_at: datetime
+    updated_at: datetime
+    items: list[AnalysisBatchItemResponse]
 
 
 class AnalysisListResponse(BaseModel):

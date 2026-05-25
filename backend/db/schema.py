@@ -122,6 +122,35 @@ Index("ix_analysis_repositories_label_trgm", analysis_repositories.c.repository_
 Index("ix_analysis_repositories_text_trgm", analysis_repositories.c.search_text)
 
 
+analysis_batches = Table(
+    "analysis_batches",
+    metadata,
+    uuid_pk(),
+    Column("tenant_id", UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False),
+    Column("created_by_user_id", UUID(as_uuid=True), ForeignKey("users.id"), nullable=False),
+    Column("status", Text, nullable=False),
+    Column("max_parallel", Integer, nullable=False),
+    Column("total_count", Integer, nullable=False),
+    Column("pending_count", Integer, nullable=False),
+    Column("active_count", Integer, nullable=False),
+    Column("completed_count", Integer, nullable=False),
+    Column("failed_count", Integer, nullable=False),
+    Column("cancelled_count", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("completed_at", DateTime(timezone=True)),
+    Column("error_code", Text),
+    Column("error_message", Text),
+)
+Index(
+    "ix_analysis_batches_tenant_user_created",
+    analysis_batches.c.tenant_id,
+    analysis_batches.c.created_by_user_id,
+    analysis_batches.c.created_at,
+)
+
+
 user_credentials = Table(
     "user_credentials",
     metadata,
@@ -257,6 +286,38 @@ agent_sessions = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 Index("ix_agent_sessions_analysis_id", agent_sessions.c.analysis_id)
+
+
+analysis_batch_items = Table(
+    "analysis_batch_items",
+    metadata,
+    uuid_pk(),
+    Column("batch_id", UUID(as_uuid=True), ForeignKey("analysis_batches.id"), nullable=False),
+    Column("analysis_id", UUID(as_uuid=True), ForeignKey("analyses.id"), nullable=False),
+    Column("agent_id", UUID(as_uuid=True), ForeignKey("agent_sessions.id"), nullable=False),
+    Column("repository_url", Text, nullable=False),
+    Column("repository_url_hash", Text, nullable=False),
+    Column("requested_ref", Text, nullable=False),
+    Column("analysis_profile_id", UUID(as_uuid=True)),
+    Column("config_snapshot_id", UUID(as_uuid=True), nullable=False),
+    Column("status", Text, nullable=False),
+    Column("sort_order", Integer, nullable=False),
+    Column("dispatch_owner", Text),
+    Column("dispatched_at", DateTime(timezone=True)),
+    Column("completed_at", DateTime(timezone=True)),
+    Column("error_code", Text),
+    Column("error_message", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index(
+    "ix_analysis_batch_items_batch_status_sort",
+    analysis_batch_items.c.batch_id,
+    analysis_batch_items.c.status,
+    analysis_batch_items.c.sort_order,
+)
+Index("ix_analysis_batch_items_batch_analysis", analysis_batch_items.c.batch_id, analysis_batch_items.c.analysis_id)
+Index("uq_analysis_batch_items_analysis", analysis_batch_items.c.analysis_id, unique=True)
 
 
 agent_turns = Table(

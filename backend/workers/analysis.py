@@ -52,6 +52,21 @@ class AnalysisCommandHandler:
         await self._connection.execute(
             text(
                 """
+                UPDATE analysis_batch_items
+                SET status = 'snapshotting',
+                    updated_at = :updated_at
+                WHERE analysis_id = :analysis_id
+                  AND status = 'dispatched'
+                """
+            ),
+            {
+                "analysis_id": event.analysis_id,
+                "updated_at": now,
+            },
+        )
+        await self._connection.execute(
+            text(
+                """
                 UPDATE agent_sessions
                 SET status = :status, updated_at = :updated_at
                 WHERE id = :agent_id

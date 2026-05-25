@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 from backend.api.app import create_app
 from backend.auth.github import GitHubEmail, GitHubOAuthConfig, GitHubUser
+from backend.auth.jwt import decode_jwt
 from backend.auth.oauth import (
     InMemoryOAuthCodeStore,
     InMemoryOAuthStateStore,
@@ -94,8 +95,11 @@ class AuthApiTest(unittest.TestCase):
         self.assertEqual(logged_in.status_code, 200)
         tokens = logged_in.json()
         self.assertEqual(tokens["token_type"], "bearer")
+        self.assertEqual(tokens["expires_in"], 24 * 60 * 60)
         self.assertIn("access_token", tokens)
         self.assertIn("refresh_token", tokens)
+        claims = decode_jwt(tokens["access_token"], secret="deepdive-dev-secret")
+        self.assertEqual(claims["exp"] - claims["iat"], 24 * 60 * 60)
 
         me = self.client.get("/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"})
 

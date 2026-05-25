@@ -30,6 +30,8 @@ class DatabaseSchemaTest(unittest.TestCase):
             "evidence",
             "memory_summaries",
             "analysis_repositories",
+            "analysis_batches",
+            "analysis_batch_items",
             "config_snapshots",
             "outbox_events",
             "processed_events",
@@ -94,6 +96,8 @@ class DatabaseSchemaTest(unittest.TestCase):
         user_roles = metadata.tables["user_roles"]
         oauth_accounts = metadata.tables["oauth_accounts"]
         analysis_repositories = metadata.tables["analysis_repositories"]
+        analysis_batches = metadata.tables["analysis_batches"]
+        analysis_batch_items = metadata.tables["analysis_batch_items"]
 
         self.assertIn("created_by_user_id", metadata.tables["analyses"].c)
         self.assertIn(
@@ -139,6 +143,28 @@ class DatabaseSchemaTest(unittest.TestCase):
         self.assertIn(
             ("tenant_id", "created_by_user_id", "last_analyzed_at"),
             {_columns(index) for index in analysis_repositories.indexes},
+        )
+        self.assertIn("max_parallel", analysis_batches.c)
+        self.assertIn("pending_count", analysis_batches.c)
+        self.assertIn("active_count", analysis_batches.c)
+        self.assertIn("completed_count", analysis_batches.c)
+        self.assertIn("failed_count", analysis_batches.c)
+        self.assertIn("cancelled_count", analysis_batches.c)
+        self.assertIn(
+            ("tenant_id", "created_by_user_id", "created_at"),
+            {_columns(index) for index in analysis_batches.indexes},
+        )
+        self.assertIn("status", analysis_batch_items.c)
+        self.assertIn("sort_order", analysis_batch_items.c)
+        self.assertIn("dispatched_at", analysis_batch_items.c)
+        self.assertIn("dispatch_owner", analysis_batch_items.c)
+        self.assertIn(
+            ("batch_id", "status", "sort_order"),
+            {_columns(index) for index in analysis_batch_items.indexes},
+        )
+        self.assertIn(
+            ("analysis_id",),
+            {_columns(index) for index in analysis_batch_items.indexes if index.unique},
         )
         self.assertIn(
             ("event_id", "consumer_name"),

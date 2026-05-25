@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 
+from backend.api.records import AnalysisBatchCreateItem
 from backend.api.services import PostgresAnalysisService
 from backend.config import AppConfig, OpenAIConfig
 from backend.events import EventEnvelope, EventType
@@ -81,6 +82,49 @@ class PostgresAnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent_session_params["effective_runtime_json"]["reasoning_summary"], "detailed")
         self.assertFalse(agent_session_params["effective_runtime_json"]["show_reasoning_summary"])
         self.assertEqual(agent_session_params["effective_runtime_json"]["transport"], "websocket_v2")
+
+    async def test_create_batch_persists_pending_items_and_only_batch_submitted_outbox(self) -> None:
+        database = FakeDatabase()
+        service = PostgresAnalysisService(database, config=AppConfig.default(), config_version="config-fixture-v1")
+
+        batch = await service.create_batch(
+            items=[
+                AnalysisBatchCreateItem(
+                    repository_url="https://github.com/example/one.git",
+                    requested_ref="main",
+                ),
+                AnalysisBatchCreateItem(
+                    repository_url="https://github.com/example/two.git",
+                    requested_ref="release",
+                ),
+                AnalysisBatchCreateItem(
+                    repository_url="https://github.com/example/three.git",
+                    requested_ref="main",
+                ),
+            ],
+            max_parallel=2,
+        )
+
+        self.assertEqual(database.begin_count, 1)
+        self.assertEqual(database.committed_count, 1)
+        self.assertEqual(batch.total_count, 3)
+        self.assertEqual(batch.pending_count, 3)
+        self.assertEqual(batch.active_count, 0)
+        self.assertEqual([item.status for item in batch.items], ["pending", "pending", "pending"])
+        executed_sql = "\n".join(str(statement) for statement, _ in database.connection.executed)
+        self.assertIn("INSERT INTO analysis_batches", executed_sql)
+        self.assertIn("INSERT INTO analysis_batch_items", executed_sql)
+        self.assertIn("INSERT INTO analyses", executed_sql)
+        self.assertIn("INSERT INTO agent_sessions", executed_sql)
+
+        outbox_events = [
+            EventEnvelope.from_json_value(params["payload_json"])
+            for statement, params in database.connection.executed
+            if "INSERT INTO outbox_events" in str(statement)
+        ]
+        self.assertEqual([event.event_type for event in outbox_events], [EventType.ANALYSIS_BATCH_SUBMITTED])
+        self.assertEqual(outbox_events[0].payload["batch_id"], str(batch.batch_id))
+        self.assertEqual(outbox_events[0].payload["max_parallel"], 2)
 
     async def test_cancel_updates_analysis_and_session_then_writes_outbox_event(self) -> None:
         analysis_id = new_uuid7()

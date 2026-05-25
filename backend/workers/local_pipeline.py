@@ -25,6 +25,7 @@ from backend.snapshot.service import SnapshotService
 from backend.storage import DEFAULT_OBJECT_BUCKET, MinioObjectStorage
 from backend.workers.analysis import AnalysisCommandHandler
 from backend.workers.asyncio_compat import run_async_worker
+from backend.workers.batch_scheduler import AnalysisBatchSchedulerHandler
 from backend.workers.execution import ExecutionCommandHandler
 
 
@@ -137,6 +138,15 @@ async def _dispatch_event(
 ) -> None:
     if event.event_type in {EventType.ANALYSIS_REQUESTED, EventType.ANALYSIS_CANCEL_REQUESTED}:
         await AnalysisCommandHandler(connection)(event)
+        return
+    if event.event_type in {
+        EventType.ANALYSIS_BATCH_SUBMITTED,
+        EventType.ANALYSIS_BATCH_SLOT_AVAILABLE,
+        EventType.ANALYSIS_COMPLETED,
+        EventType.ANALYSIS_FAILED,
+        EventType.ANALYSIS_CANCELLED,
+    }:
+        await AnalysisBatchSchedulerHandler(connection)(event)
         return
     if event.event_type == EventType.SNAPSHOT_REQUESTED:
         await SnapshotService(

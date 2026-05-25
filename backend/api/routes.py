@@ -12,6 +12,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.api.auth_dependencies import require_permission
 from backend.api.schemas import (
+    AnalysisBatchCreateRequest,
+    AnalysisBatchCreateResponse,
+    AnalysisBatchItemResponse,
     AnalysisCreateRequest,
     AnalysisCreateResponse,
     AnalysisListResponse,
@@ -22,7 +25,14 @@ from backend.api.schemas import (
     RepositorySearchListResponse,
     RepositorySearchResponse,
 )
-from backend.api.services import AnalysisRecord, RepositorySearchRecord, encode_list_cursor, maybe_await
+from backend.api.services import (
+    AnalysisBatchCreateItem,
+    AnalysisBatchRecord,
+    AnalysisRecord,
+    RepositorySearchRecord,
+    encode_list_cursor,
+    maybe_await,
+)
 from backend.api.sse import (
     StreamEvent,
     event_seq,
@@ -47,6 +57,15 @@ class AnalysisService(Protocol):
         tenant_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
     ) -> AnalysisRecord: ...
+
+    def create_batch(
+        self,
+        *,
+        items: list[AnalysisBatchCreateItem],
+        max_parallel: int,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> AnalysisBatchRecord: ...
 
     def list(
         self,
@@ -146,6 +165,34 @@ async def create_analysis(
         status=record.status,
         created_at=record.created_at,
     )
+
+
+@router.post(
+    "/analysis/batches",
+    response_model=AnalysisBatchCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_analysis_batch(
+    body: AnalysisBatchCreateRequest,
+    service: Annotated[AnalysisService, Depends(get_analysis_service)],
+    current_user: Annotated[CurrentUser, Depends(require_permission("analysis:create"))],
+) -> AnalysisBatchCreateResponse:
+    batch = await maybe_await(
+        service.create_batch(
+            items=[
+                AnalysisBatchCreateItem(
+                    repository_url=str(item.repository_url),
+                    requested_ref=item.ref,
+                    analysis_profile_id=item.analysis_profile_id,
+                )
+                for item in body.items
+            ],
+            max_parallel=body.max_parallel,
+            tenant_id=current_user.tenant_id,
+            created_by_user_id=current_user.id,
+        )
+    )
+    return _to_batch_create_response(batch)
 
 
 @router.get("/analysis", response_model=AnalysisListResponse)
@@ -315,6 +362,38 @@ def _to_response(record: AnalysisRecord) -> AnalysisResponse:
         error_message=record.error_message,
         created_at=record.created_at,
         updated_at=record.updated_at,
+    )
+
+
+def _to_batch_create_response(record: AnalysisBatchRecord) -> AnalysisBatchCreateResponse:
+    return AnalysisBatchCreateResponse(
+        batch_id=record.batch_id,
+        status=record.status,
+        max_parallel=record.max_parallel,
+        total_count=record.total_count,
+        pending_count=record.pending_count,
+        active_count=record.active_count,
+        completed_count=record.completed_count,
+        failed_count=record.failed_count,
+        cancelled_count=record.cancelled_count,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        items=[
+            AnalysisBatchItemResponse(
+                batch_item_id=item.batch_item_id,
+                analysis_id=item.analysis_id,
+                agent_id=item.agent_id,
+                repository_url=item.repository_url,
+                requested_ref=item.requested_ref,
+                status=item.status,
+                sort_order=item.sort_order,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+                error_code=item.error_code,
+                error_message=item.error_message,
+            )
+            for item in record.items
+        ],
     )
 
 

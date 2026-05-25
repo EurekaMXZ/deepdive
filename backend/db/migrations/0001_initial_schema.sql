@@ -78,6 +78,26 @@ CREATE TABLE analysis_repositories (
     updated_at timestamptz not null
 );
 
+CREATE TABLE analysis_batches (
+    id uuid primary key default uuidv7(),
+    tenant_id uuid not null references tenants(id),
+    created_by_user_id uuid not null references users(id),
+    status text not null,
+    max_parallel integer not null,
+    total_count integer not null,
+    pending_count integer not null,
+    active_count integer not null,
+    completed_count integer not null,
+    failed_count integer not null,
+    cancelled_count integer not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null,
+    started_at timestamptz,
+    completed_at timestamptz,
+    error_code text,
+    error_message text
+);
+
 CREATE TABLE oauth_accounts (
     id uuid primary key default uuidv7(),
     tenant_id uuid not null references tenants(id),
@@ -175,6 +195,27 @@ CREATE TABLE agent_sessions (
     latest_response_id text,
     turn_count integer not null,
     max_turns integer not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+);
+
+CREATE TABLE analysis_batch_items (
+    id uuid primary key default uuidv7(),
+    batch_id uuid not null references analysis_batches(id),
+    analysis_id uuid not null references analyses(id),
+    agent_id uuid not null references agent_sessions(id),
+    repository_url text not null,
+    repository_url_hash text not null,
+    requested_ref text not null,
+    analysis_profile_id uuid,
+    config_snapshot_id uuid not null,
+    status text not null,
+    sort_order integer not null,
+    dispatch_owner text,
+    dispatched_at timestamptz,
+    completed_at timestamptz,
+    error_code text,
+    error_message text,
     created_at timestamptz not null,
     updated_at timestamptz not null
 );
@@ -470,6 +511,9 @@ CREATE INDEX ix_analysis_repositories_label_trgm
 CREATE INDEX ix_analysis_repositories_text_trgm
     ON analysis_repositories USING gin (search_text gin_trgm_ops);
 
+CREATE INDEX ix_analysis_batches_tenant_user_created
+    ON analysis_batches (tenant_id, created_by_user_id, created_at);
+
 CREATE UNIQUE INDEX uq_user_credentials_user_id
     ON user_credentials (user_id);
 
@@ -505,6 +549,15 @@ CREATE INDEX ix_audit_log_tenant_created_at
 
 CREATE INDEX ix_agent_sessions_analysis_id
     ON agent_sessions (analysis_id);
+
+CREATE INDEX ix_analysis_batch_items_batch_status_sort
+    ON analysis_batch_items (batch_id, status, sort_order);
+
+CREATE INDEX ix_analysis_batch_items_batch_analysis
+    ON analysis_batch_items (batch_id, analysis_id);
+
+CREATE UNIQUE INDEX uq_analysis_batch_items_analysis
+    ON analysis_batch_items (analysis_id);
 
 CREATE INDEX ix_agent_turns_agent_turn_index
     ON agent_turns (agent_id, turn_index);

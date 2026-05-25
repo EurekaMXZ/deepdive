@@ -7,7 +7,15 @@ from uuid import UUID
 
 from backend.api.pagination import cursor_offset
 from backend.auth.jwt import JwtError, decode_jwt, encode_jwt
-from backend.auth.models import CurrentUser, ExternalIdentityRecord, PermissionRecord, RoleRecord, TokenPair, UserRecord
+from backend.auth.models import (
+    ACCESS_TOKEN_TTL_SECONDS,
+    CurrentUser,
+    ExternalIdentityRecord,
+    PermissionRecord,
+    RoleRecord,
+    TokenPair,
+    UserRecord,
+)
 from backend.auth.passwords import hash_password, verify_password
 from backend.auth.tokens import InMemoryRefreshTokenStore, RefreshTokenStore
 from backend.ids import new_uuid7
@@ -296,7 +304,7 @@ class InMemoryAuthService:
                 "jti": str(new_uuid7()),
             },
             secret=self._jwt_secret,
-            expires_delta=timedelta(minutes=30),
+            expires_delta=timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS),
         )
         refresh_token = secrets.token_urlsafe(48)
         self._refresh_token_store.put(

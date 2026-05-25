@@ -13,6 +13,11 @@ from backend.workers.analysis_runtime import (
     build_analysis_command_topics,
     load_analysis_worker_settings,
 )
+from backend.workers.batch_scheduler_runtime import (
+    AnalysisBatchSchedulerWorkerSettings,
+    build_analysis_batch_scheduler_command_topics,
+    load_analysis_batch_scheduler_worker_settings,
+)
 from backend.workers.outbox import WorkerSettings, load_worker_settings
 from backend.workers.snapshot_runtime import (
     SnapshotWorkerSettings,
@@ -140,6 +145,36 @@ class WorkerEntrypointTest(unittest.TestCase):
 
         self.assertEqual(build_analysis_command_topics(), ("deepdive.analysis.commands",))
         self.assertEqual(event.event_type, EventType.ANALYSIS_REQUESTED)
+
+    def test_analysis_batch_scheduler_subscribes_to_batch_commands_topic(self) -> None:
+        event = EventEnvelope.new(event_type=EventType.ANALYSIS_BATCH_SUBMITTED)
+
+        self.assertEqual(build_analysis_batch_scheduler_command_topics(), ("deepdive.analysis-batch.commands",))
+        self.assertEqual(event.event_type, EventType.ANALYSIS_BATCH_SUBMITTED)
+
+    def test_analysis_batch_scheduler_settings_load_from_environment(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DATABASE_URL": "postgresql+psycopg://deepdive:deepdive@localhost:5432/deepdive",
+                "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
+                "ANALYSIS_BATCH_SCHEDULER_WORKER_GROUP": "batch-scheduler-group",
+                "ANALYSIS_BATCH_SCHEDULER_WORKER_MAX_MESSAGES": "12",
+            },
+            clear=True,
+        ):
+            settings = load_analysis_batch_scheduler_worker_settings()
+
+        self.assertEqual(
+            settings,
+            AnalysisBatchSchedulerWorkerSettings(
+                database_url="postgresql+psycopg://deepdive:deepdive@localhost:5432/deepdive",
+                kafka_bootstrap_servers="localhost:9092",
+                consumer_group="batch-scheduler-group",
+                max_messages=12,
+                run_forever=True,
+            ),
+        )
 
     def test_analysis_worker_settings_load_from_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -289,9 +324,11 @@ class WorkerEntrypointTest(unittest.TestCase):
 
     def test_all_worker_modules_import(self) -> None:
         import backend.workers.agent_runtime
+        import backend.workers.batch_scheduler_runtime
         import backend.workers.execution_runtime
 
         self.assertIsNotNone(backend.workers.agent_runtime)
+        self.assertIsNotNone(backend.workers.batch_scheduler_runtime)
         self.assertIsNotNone(backend.workers.execution_runtime)
 
 

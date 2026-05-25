@@ -8,6 +8,14 @@ ANALYSIS_COMMAND_TOPICS: dict[EventType, str] = {
     EventType.ANALYSIS_CANCEL_REQUESTED: "deepdive.analysis.commands",
 }
 
+ANALYSIS_BATCH_SCHEDULER_COMMAND_TOPICS: dict[EventType, str] = {
+    EventType.ANALYSIS_BATCH_SUBMITTED: "deepdive.analysis-batch.commands",
+    EventType.ANALYSIS_BATCH_SLOT_AVAILABLE: "deepdive.analysis-batch.commands",
+    EventType.ANALYSIS_COMPLETED: "deepdive.analysis-batch.commands",
+    EventType.ANALYSIS_FAILED: "deepdive.analysis-batch.commands",
+    EventType.ANALYSIS_CANCELLED: "deepdive.analysis-batch.commands",
+}
+
 SNAPSHOT_COMMAND_TOPICS: dict[EventType, str] = {
     EventType.SNAPSHOT_REQUESTED: "deepdive.snapshot.commands",
 }
@@ -26,6 +34,7 @@ EXECUTION_COMMAND_TOPICS: dict[EventType, str] = {
 
 COMMAND_TOPICS: dict[EventType, str] = {
     **ANALYSIS_COMMAND_TOPICS,
+    **ANALYSIS_BATCH_SCHEDULER_COMMAND_TOPICS,
     **SNAPSHOT_COMMAND_TOPICS,
     **AGENT_INBOX_TOPICS,
     **EXECUTION_COMMAND_TOPICS,

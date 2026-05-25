@@ -11,9 +11,20 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.api.pagination import decode_list_cursor
-from backend.api.records import AgentStreamEventRecord, AnalysisRecord, RepositorySearchRecord
+from backend.api.records import (
+    AgentStreamEventRecord,
+    AnalysisBatchCreateItem,
+    AnalysisBatchItemRecord,
+    AnalysisBatchRecord,
+    AnalysisRecord,
+    RepositorySearchRecord,
+)
 from backend.api.repository_query import parse_repository_suggestion_query
-from backend.api.repository_search import canonicalize_repository_url, normalize_repository_search_query
+from backend.api.repository_search import (
+    CanonicalRepository,
+    canonicalize_repository_url,
+    normalize_repository_search_query,
+)
 from backend.config import DEFAULT_CONFIG_VERSION, AppConfig, create_config_snapshot
 from backend.db.connections import AsyncDbConnection
 from backend.events import EventEnvelope, EventType
@@ -293,6 +304,109 @@ class PostgresAnalysisService:
             resolved_commit_sha=None,
             created_at=now,
             updated_at=now,
+            tenant_id=tenant_id,
+            created_by_user_id=created_by_user_id,
+        )
+
+    async def create_batch(
+        self,
+        *,
+        items: list[AnalysisBatchCreateItem],
+        max_parallel: int,
+        tenant_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+    ) -> AnalysisBatchRecord:
+        now = datetime.now(UTC)
+        batch_id = new_uuid7()
+        batch_items: list[AnalysisBatchItemRecord] = []
+
+        async with self._database.begin() as connection:
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO analysis_batches (
+                        id,
+                        tenant_id,
+                        created_by_user_id,
+                        status,
+                        max_parallel,
+                        total_count,
+                        pending_count,
+                        active_count,
+                        completed_count,
+                        failed_count,
+                        cancelled_count,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        :id,
+                        :tenant_id,
+                        :created_by_user_id,
+                        :status,
+                        :max_parallel,
+                        :total_count,
+                        :pending_count,
+                        :active_count,
+                        :completed_count,
+                        :failed_count,
+                        :cancelled_count,
+                        :created_at,
+                        :updated_at
+                    )
+                    """
+                ),
+                {
+                    "id": batch_id,
+                    "tenant_id": tenant_id,
+                    "created_by_user_id": created_by_user_id,
+                    "status": "queued",
+                    "max_parallel": max_parallel,
+                    "total_count": len(items),
+                    "pending_count": len(items),
+                    "active_count": 0,
+                    "completed_count": 0,
+                    "failed_count": 0,
+                    "cancelled_count": 0,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            for sort_order, item in enumerate(items):
+                batch_item = await self._insert_batch_analysis(
+                    connection,
+                    batch_id=batch_id,
+                    item=item,
+                    sort_order=sort_order,
+                    now=now,
+                    tenant_id=tenant_id,
+                    created_by_user_id=created_by_user_id,
+                )
+                batch_items.append(batch_item)
+
+            await DbOutboxSink(connection).add(
+                EventEnvelope.new(
+                    event_type=EventType.ANALYSIS_BATCH_SUBMITTED,
+                    payload={
+                        "batch_id": str(batch_id),
+                        "max_parallel": max_parallel,
+                    },
+                )
+            )
+
+        return AnalysisBatchRecord(
+            batch_id=batch_id,
+            status="queued",
+            max_parallel=max_parallel,
+            total_count=len(items),
+            pending_count=len(items),
+            active_count=0,
+            completed_count=0,
+            failed_count=0,
+            cancelled_count=0,
+            created_at=now,
+            updated_at=now,
+            items=batch_items,
             tenant_id=tenant_id,
             created_by_user_id=created_by_user_id,
         )
@@ -672,6 +786,322 @@ class PostgresAnalysisService:
             "use_previous_response_id": self._config.openai.use_previous_response_id,
             "transport": self._config.openai.transport,
         }
+
+    async def _insert_batch_analysis(
+        self,
+        connection: AsyncDbConnection,
+        *,
+        batch_id: UUID,
+        item: AnalysisBatchCreateItem,
+        sort_order: int,
+        now: datetime,
+        tenant_id: UUID | None,
+        created_by_user_id: UUID | None,
+    ) -> AnalysisBatchItemRecord:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        batch_item_id = new_uuid7()
+        config_snapshot = create_config_snapshot(self._config, config_version=self._config_version)
+        canonical_repository = canonicalize_repository_url(item.repository_url)
+        repository_url = canonical_repository.repository_url
+        repository_url_hash = _sha256_text(repository_url)
+        await connection.execute(
+            text(
+                """
+                INSERT INTO config_snapshots (id, config_version, content_hash, config_json, created_at)
+                VALUES (:id, :config_version, :content_hash, :config_json, :created_at)
+                """
+            ).bindparams(bindparam("config_json", type_=JSONB)),
+            {
+                "id": config_snapshot.id,
+                "config_version": config_snapshot.config_version,
+                "content_hash": config_snapshot.content_hash,
+                "config_json": config_snapshot.config_json,
+                "created_at": now,
+            },
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO analyses (
+                    id,
+                    tenant_id,
+                    created_by_user_id,
+                    repository_url,
+                    repository_url_hash,
+                    requested_ref,
+                    analysis_profile_id,
+                    config_snapshot_id,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :id,
+                    :tenant_id,
+                    :created_by_user_id,
+                    :repository_url,
+                    :repository_url_hash,
+                    :requested_ref,
+                    :analysis_profile_id,
+                    :config_snapshot_id,
+                    :status,
+                    :created_at,
+                    :updated_at
+                )
+                """
+            ),
+            {
+                "id": analysis_id,
+                "tenant_id": tenant_id,
+                "created_by_user_id": created_by_user_id,
+                "repository_url": repository_url,
+                "repository_url_hash": repository_url_hash,
+                "requested_ref": item.requested_ref,
+                "analysis_profile_id": item.analysis_profile_id,
+                "config_snapshot_id": config_snapshot.id,
+                "status": "queued",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO agent_sessions (
+                    id,
+                    analysis_id,
+                    snapshot_id,
+                    parent_agent_id,
+                    config_snapshot_id,
+                    status,
+                    goal_ref,
+                    effective_model,
+                    effective_prompt_version,
+                    effective_tool_registry_version,
+                    effective_limits_json,
+                    effective_runtime_json,
+                    latest_response_id,
+                    turn_count,
+                    max_turns,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :id,
+                    :analysis_id,
+                    :snapshot_id,
+                    :parent_agent_id,
+                    :config_snapshot_id,
+                    :status,
+                    :goal_ref,
+                    :effective_model,
+                    :effective_prompt_version,
+                    :effective_tool_registry_version,
+                    :effective_limits_json,
+                    :effective_runtime_json,
+                    :latest_response_id,
+                    :turn_count,
+                    :max_turns,
+                    :created_at,
+                    :updated_at
+                )
+                """
+            ).bindparams(
+                bindparam("effective_limits_json", type_=JSONB),
+                bindparam("effective_runtime_json", type_=JSONB),
+            ),
+            {
+                "id": agent_id,
+                "analysis_id": analysis_id,
+                "snapshot_id": None,
+                "parent_agent_id": None,
+                "config_snapshot_id": config_snapshot.id,
+                "status": "queued",
+                "goal_ref": self._goal_ref(),
+                "effective_model": self._config.openai.model,
+                "effective_prompt_version": self._config_version,
+                "effective_tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
+                "effective_limits_json": self._effective_limits(),
+                "effective_runtime_json": self._effective_runtime(),
+                "latest_response_id": None,
+                "turn_count": 0,
+                "max_turns": self._max_turns(),
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO analysis_batch_items (
+                    id,
+                    batch_id,
+                    analysis_id,
+                    agent_id,
+                    repository_url,
+                    repository_url_hash,
+                    requested_ref,
+                    analysis_profile_id,
+                    config_snapshot_id,
+                    status,
+                    sort_order,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :id,
+                    :batch_id,
+                    :analysis_id,
+                    :agent_id,
+                    :repository_url,
+                    :repository_url_hash,
+                    :requested_ref,
+                    :analysis_profile_id,
+                    :config_snapshot_id,
+                    :status,
+                    :sort_order,
+                    :created_at,
+                    :updated_at
+                )
+                """
+            ),
+            {
+                "id": batch_item_id,
+                "batch_id": batch_id,
+                "analysis_id": analysis_id,
+                "agent_id": agent_id,
+                "repository_url": repository_url,
+                "repository_url_hash": repository_url_hash,
+                "requested_ref": item.requested_ref,
+                "analysis_profile_id": item.analysis_profile_id,
+                "config_snapshot_id": config_snapshot.id,
+                "status": "pending",
+                "sort_order": sort_order,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        if tenant_id is not None and created_by_user_id is not None:
+            await self._upsert_repository_index(
+                connection,
+                canonical_repository=canonical_repository,
+                repository_url_hash=repository_url_hash,
+                analysis_id=analysis_id,
+                requested_ref=item.requested_ref,
+                now=now,
+                tenant_id=tenant_id,
+                created_by_user_id=created_by_user_id,
+            )
+        return AnalysisBatchItemRecord(
+            batch_item_id=batch_item_id,
+            batch_id=batch_id,
+            analysis_id=analysis_id,
+            agent_id=agent_id,
+            repository_url=repository_url,
+            requested_ref=item.requested_ref,
+            status="pending",
+            sort_order=sort_order,
+            created_at=now,
+            updated_at=now,
+        )
+
+    async def _upsert_repository_index(
+        self,
+        connection: AsyncDbConnection,
+        *,
+        canonical_repository: CanonicalRepository,
+        repository_url_hash: str,
+        analysis_id: UUID,
+        requested_ref: str,
+        now: datetime,
+        tenant_id: UUID,
+        created_by_user_id: UUID,
+    ) -> None:
+        await connection.execute(
+            text(
+                """
+                INSERT INTO analysis_repositories (
+                    id,
+                    tenant_id,
+                    created_by_user_id,
+                    repository_url,
+                    repository_url_hash,
+                    repository_host,
+                    repository_owner,
+                    repository_name,
+                    repository_label,
+                    search_text,
+                    latest_analysis_id,
+                    latest_status,
+                    latest_requested_ref,
+                    latest_resolved_commit_sha,
+                    analysis_count,
+                    completed_analysis_count,
+                    last_analyzed_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :id,
+                    :tenant_id,
+                    :created_by_user_id,
+                    :repository_url,
+                    :repository_url_hash,
+                    :repository_host,
+                    :repository_owner,
+                    :repository_name,
+                    :repository_label,
+                    :search_text,
+                    :latest_analysis_id,
+                    :latest_status,
+                    :latest_requested_ref,
+                    :latest_resolved_commit_sha,
+                    :analysis_count,
+                    :completed_analysis_count,
+                    :last_analyzed_at,
+                    :created_at,
+                    :updated_at
+                )
+                ON CONFLICT (tenant_id, created_by_user_id, repository_url_hash) DO UPDATE
+                SET repository_url = EXCLUDED.repository_url,
+                    repository_host = EXCLUDED.repository_host,
+                    repository_owner = EXCLUDED.repository_owner,
+                    repository_name = EXCLUDED.repository_name,
+                    repository_label = EXCLUDED.repository_label,
+                    search_text = EXCLUDED.search_text,
+                    latest_analysis_id = EXCLUDED.latest_analysis_id,
+                    latest_status = EXCLUDED.latest_status,
+                    latest_requested_ref = EXCLUDED.latest_requested_ref,
+                    latest_resolved_commit_sha = EXCLUDED.latest_resolved_commit_sha,
+                    analysis_count = analysis_repositories.analysis_count + 1,
+                    completed_analysis_count = analysis_repositories.completed_analysis_count,
+                    last_analyzed_at = EXCLUDED.last_analyzed_at,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            {
+                "id": new_uuid7(),
+                "tenant_id": tenant_id,
+                "created_by_user_id": created_by_user_id,
+                "repository_url": canonical_repository.repository_url,
+                "repository_url_hash": repository_url_hash,
+                "repository_host": canonical_repository.repository_host,
+                "repository_owner": canonical_repository.repository_owner,
+                "repository_name": canonical_repository.repository_name,
+                "repository_label": canonical_repository.repository_label,
+                "search_text": canonical_repository.search_text,
+                "latest_analysis_id": analysis_id,
+                "latest_status": "queued",
+                "latest_requested_ref": requested_ref,
+                "latest_resolved_commit_sha": None,
+                "analysis_count": 1,
+                "completed_analysis_count": 0,
+                "last_analyzed_at": now,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
 
 
 async def _fetch_analysis_record(

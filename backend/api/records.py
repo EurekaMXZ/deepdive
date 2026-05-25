@@ -23,6 +23,47 @@ class AnalysisRecord:
     created_by_user_id: UUID | None = None
 
 
+@dataclass(frozen=True)
+class AnalysisBatchCreateItem:
+    repository_url: str
+    requested_ref: str
+    analysis_profile_id: UUID | None = None
+
+
+@dataclass
+class AnalysisBatchItemRecord:
+    batch_item_id: UUID
+    batch_id: UUID
+    analysis_id: UUID
+    agent_id: UUID
+    repository_url: str
+    requested_ref: str
+    status: str
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+@dataclass
+class AnalysisBatchRecord:
+    batch_id: UUID
+    status: str
+    max_parallel: int
+    total_count: int
+    pending_count: int
+    active_count: int
+    completed_count: int
+    failed_count: int
+    cancelled_count: int
+    created_at: datetime
+    updated_at: datetime
+    items: list[AnalysisBatchItemRecord]
+    tenant_id: UUID | None = None
+    created_by_user_id: UUID | None = None
+
+
 @dataclass
 class AgentStreamEventRecord:
     seq: int

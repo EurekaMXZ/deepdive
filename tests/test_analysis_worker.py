@@ -29,6 +29,7 @@ class AnalysisWorkerTest(unittest.IsolatedAsyncioTestCase):
         executed_sql = "\n".join(str(statement) for statement, _ in connection.executed)
         self.assertIn("UPDATE analyses", executed_sql)
         self.assertIn("status = :status", executed_sql)
+        self.assertIn("UPDATE analysis_batch_items", executed_sql)
         self.assertIn("UPDATE agent_sessions", executed_sql)
         self.assertIn("INSERT INTO outbox_events", executed_sql)
 

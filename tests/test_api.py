@@ -33,6 +33,59 @@ class AnalysisApiTest(unittest.TestCase):
         self.assertEqual(body["status"], "queued")
         self.assertIn("created_at", body)
 
+    def test_create_analysis_batch_returns_pending_items(self) -> None:
+        response = self.client.post(
+            "/analysis/batches",
+            json={
+                "max_parallel": 2,
+                "items": [
+                    {
+                        "repository_url": "https://github.com/example/one.git",
+                        "ref": "main",
+                    },
+                    {
+                        "repository_url": "https://github.com/example/two.git",
+                        "ref": "release",
+                    },
+                    {
+                        "repository_url": "https://github.com/example/three.git",
+                        "ref": "main",
+                    },
+                ],
+            },
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(uuid.UUID(body["batch_id"]).version, 7)
+        self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["max_parallel"], 2)
+        self.assertEqual(body["total_count"], 3)
+        self.assertEqual(body["pending_count"], 3)
+        self.assertEqual(body["active_count"], 0)
+        self.assertEqual([item["status"] for item in body["items"]], ["pending", "pending", "pending"])
+        self.assertEqual([item["sort_order"] for item in body["items"]], [0, 1, 2])
+        self.assertEqual(body["items"][1]["requested_ref"], "release")
+
+    def test_create_analysis_batch_rejects_repository_url_credentials(self) -> None:
+        response = self.client.post(
+            "/analysis/batches",
+            json={
+                "max_parallel": 2,
+                "items": [
+                    {
+                        "repository_url": "https://token123@github.com/example/private.git",
+                        "ref": "main",
+                    }
+                ],
+            },
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("repository_url", str(response.json()))
+
     def test_create_analysis_rejects_repository_url_credentials(self) -> None:
         response = self.client.post(
             "/analysis",

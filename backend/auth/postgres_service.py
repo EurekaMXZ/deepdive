@@ -5,7 +5,14 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from backend.auth.jwt import JwtError, decode_jwt, encode_jwt
-from backend.auth.models import CurrentUser, PermissionRecord, RoleRecord, TokenPair, UserRecord
+from backend.auth.models import (
+    ACCESS_TOKEN_TTL_SECONDS,
+    CurrentUser,
+    PermissionRecord,
+    RoleRecord,
+    TokenPair,
+    UserRecord,
+)
 from backend.auth.passwords import verify_password
 from backend.auth.repository import PostgresAuthRepository, RoleNotFoundError
 from backend.auth.service import AuthError, current_user_from_record, normalize_email, token_hash
@@ -190,7 +197,7 @@ class PostgresAuthService:
                 "jti": str(new_uuid7()),
             },
             secret=self._jwt_secret,
-            expires_delta=timedelta(minutes=30),
+            expires_delta=timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS),
         )
         refresh_token = secrets.token_urlsafe(48)
         self._refresh_token_store.put(
