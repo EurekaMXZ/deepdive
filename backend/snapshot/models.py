@@ -82,7 +82,7 @@ class SnapshotBuildResult:
     tree_sha: str
     snapshot_policy_hash: str
     manifest_key: str
-    git_bundle_key: str
+    git_bundle_key: str | None
     tree_text_key: str
     file_tree_key: str
     file_count: int

@@ -29,11 +29,13 @@ class SnapshotBuilderTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(runner.cloned_repository_url, "https://github.com/EurekaMXZ/relaybot")
+        self.assertEqual(runner.fetched_repository_url, "https://github.com/EurekaMXZ/relaybot")
+        self.assertEqual(runner.fetched_ref, "HEAD")
+        self.assertEqual(runner.resolved_refs, ["FETCH_HEAD"])
         self.assertEqual(result.resolved_commit_sha, "b" * 40)
         self.assertEqual(result.tree_sha, "c" * 40)
         self.assertIn(result.manifest_key, storage.objects)
-        self.assertIn(result.git_bundle_key, storage.objects)
+        self.assertIsNone(result.git_bundle_key)
         self.assertIn(result.tree_text_key, storage.objects)
         self.assertIn(result.file_tree_key, storage.objects)
 
@@ -55,7 +57,7 @@ class SnapshotBuilderTest(unittest.TestCase):
         self.assertEqual(instruction.depth, 0)
         self.assertEqual(storage.get_bytes(instruction.content_ref), b"Root instructions\n")
 
-    def test_git_builder_uploads_bundle_with_put_file(self) -> None:
+    def test_git_builder_does_not_upload_git_bundle_for_partial_snapshot(self) -> None:
         storage = SpyStorage()
         runner = FakeGitRunner()
 
@@ -69,24 +71,24 @@ class SnapshotBuilderTest(unittest.TestCase):
             )
         )
 
-        self.assertIn((result.git_bundle_key, "application/octet-stream"), storage.put_file_calls)
+        self.assertIsNone(result.git_bundle_key)
+        self.assertEqual(storage.put_file_calls, [])
 
-    def test_git_builder_rejects_bundle_that_exceeds_policy_limit(self) -> None:
+    def test_git_builder_skips_bundle_creation_in_partial_snapshot_mode(self) -> None:
         storage = SpyStorage()
         runner = LargeBundleGitRunner()
 
-        with self.assertRaisesRegex(Exception, "GitBundleTooLarge") as raised:
-            GitSnapshotBuilder(git=runner).build(
-                SnapshotBuildRequest(
-                    snapshot_id=new_uuid7(),
-                    repository_url="https://github.com/EurekaMXZ/relaybot",
-                    requested_ref="HEAD",
-                    policy=SnapshotPolicy(max_file_bytes=32, max_git_bundle_bytes=4),
-                    storage=storage,
-                )
+        result = GitSnapshotBuilder(git=runner).build(
+            SnapshotBuildRequest(
+                snapshot_id=new_uuid7(),
+                repository_url="https://github.com/EurekaMXZ/relaybot",
+                requested_ref="HEAD",
+                policy=SnapshotPolicy(max_file_bytes=32, max_git_bundle_bytes=4),
+                storage=storage,
             )
+        )
 
-        self.assertEqual(getattr(raised.exception, "code", None), "GitBundleTooLarge")
+        self.assertIsNone(result.git_bundle_key)
         self.assertEqual(storage.put_file_calls, [])
 
     def test_git_builder_reads_blob_content_without_creating_archive(self) -> None:
@@ -284,14 +286,26 @@ class SnapshotBuilderTest(unittest.TestCase):
 class FakeGitRunner:
     def __init__(self) -> None:
         self.cloned_repository_url: str | None = None
+        self.fetched_repository_url: str | None = None
+        self.fetched_ref: str | None = None
+        self.resolved_refs: list[str] = []
 
     def clone_mirror(self, repository_url: str, mirror_path: Path, *, timeout_seconds: int) -> None:
         del timeout_seconds
         self.cloned_repository_url = repository_url
         mirror_path.mkdir()
 
+    def fetch_shallow_partial_ref(
+        self, repository_url: str, mirror_path: Path, ref: str, *, timeout_seconds: int
+    ) -> None:
+        del timeout_seconds
+        self.fetched_repository_url = repository_url
+        self.fetched_ref = ref
+        mirror_path.mkdir()
+
     def resolve_commit(self, mirror_path: Path, ref: str, *, timeout_seconds: int) -> str:
-        del mirror_path, ref, timeout_seconds
+        del mirror_path, timeout_seconds
+        self.resolved_refs.append(ref)
         return "b" * 40
 
     def resolve_tree(self, mirror_path: Path, commit_sha: str, *, timeout_seconds: int) -> str:
