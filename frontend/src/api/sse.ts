@@ -74,10 +74,18 @@ export function normalizeAnalysisSseEvent(
     }
   }
 
-  if (event.event === 'response.output_text.delta') {
+  if (isOutputTextEvent(event.event)) {
     return cleanUndefined({
       kind: 'output_delta',
-      text: stringValue(data.delta, ''),
+      text: outputTextFromPayload(data),
+      replayId,
+    })
+  }
+
+  if (event.event === 'agent_message') {
+    return cleanUndefined({
+      kind: 'output_delta',
+      text: agentMessageText(data),
       replayId,
     })
   }
@@ -308,6 +316,43 @@ function parseData(rawData: string): unknown {
   } catch {
     return rawData
   }
+}
+
+function isOutputTextEvent(eventName: string): boolean {
+  return (
+    eventName === 'response.output_text.delta' ||
+    eventName === 'response.output_text.done' ||
+    eventName === 'response.commentary.output_text.delta' ||
+    eventName === 'response.commentary.output_text.done' ||
+    eventName === 'commentary.output_text.delta' ||
+    eventName === 'commentary.output_text.done'
+  )
+}
+
+function outputTextFromPayload(data: Record<string, unknown>): string {
+  return stringValue(data.delta, stringValue(data.text, ''))
+}
+
+function agentMessageText(data: Record<string, unknown>): string {
+  const text = optionalString(data.text)
+  if (text !== undefined) {
+    return text
+  }
+
+  return textFromContentParts(data.content)
+}
+
+function textFromContentParts(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return ''
+  }
+
+  return value
+    .map((item) => {
+      const contentPart = asRecord(item)
+      return optionalString(contentPart.text) ?? ''
+    })
+    .join('')
 }
 
 function findFrameBoundary(value: string): number {

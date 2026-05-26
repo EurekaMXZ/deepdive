@@ -8,8 +8,9 @@ import {
   flattenMarkdownDocuments,
   markdownNodesFromDocumentArtifacts,
   markdownNodesFromDocumentList,
+  markdownNodesFromDocumentTree,
 } from '../src/domain/markdown.ts'
-import type { DocumentArtifactWithContent } from '../src/domain/documents.ts'
+import type { DocumentArtifactWithContent, DocumentTreeNode } from '../src/domain/documents.ts'
 
 const documents = [
   {
@@ -83,10 +84,10 @@ test('markdown headings are extracted without reading fenced code blocks', () =>
   )
 
   assert.deepEqual(headings, [
-    { id: 'repository-review', depth: 1, title: 'Repository Review' },
-    { id: 'api-layer', depth: 2, title: 'API Layer' },
-    { id: 'auth-permissions', depth: 3, title: 'Auth & Permissions' },
-    { id: 'api-layer-2', depth: 3, title: 'API Layer' },
+    { id: 'repository-review', depth: 1, line: 1, title: 'Repository Review' },
+    { id: 'api-layer', depth: 2, line: 7, title: 'API Layer' },
+    { id: 'auth-permissions', depth: 3, line: 8, title: 'Auth & Permissions' },
+    { id: 'api-layer-2', depth: 3, line: 10, title: 'API Layer' },
   ])
 })
 
@@ -182,6 +183,94 @@ test('document lists map only the active document content into markdown nodes', 
   ])
 })
 
+test('document tree maps folders and documents into nested markdown viewer nodes', () => {
+  const nodes = markdownNodesFromDocumentTree(
+    [
+      documentTreeNode({
+        nodeId: 'folder-backend',
+        nodeType: 'folder',
+        documentId: null,
+        title: 'Backend',
+        path: 'backend',
+        children: [
+          documentTreeNode({
+            nodeId: 'node-auth',
+            documentId: 'doc-auth',
+            title: 'Authentication',
+            path: 'backend/authentication',
+            status: 'finalized',
+          }),
+          documentTreeNode({
+            nodeId: 'folder-workers',
+            nodeType: 'folder',
+            documentId: null,
+            title: 'Workers',
+            path: 'backend/workers',
+            children: [
+              documentTreeNode({
+                nodeId: 'node-agent',
+                documentId: 'doc-agent',
+                title: 'Agent Worker',
+                path: 'backend/workers/agent-worker',
+                status: 'generating',
+              }),
+            ],
+          }),
+        ],
+      }),
+    ],
+    documentArtifact({
+      documentId: 'doc-auth',
+      title: 'Authentication',
+      status: 'finalized',
+      content: '# Auth',
+    }),
+  )
+
+  assert.deepEqual(nodes, [
+    {
+      id: 'folder-backend',
+      documentId: null,
+      title: 'Backend',
+      path: 'backend',
+      selectable: false,
+      streaming: false,
+      children: [
+        {
+          id: 'doc-auth',
+          documentId: 'doc-auth',
+          title: 'Authentication',
+          path: 'backend/authentication',
+          markdown: '# Auth',
+          selectable: true,
+          streaming: false,
+          children: [],
+        },
+        {
+          id: 'folder-workers',
+          documentId: null,
+          title: 'Workers',
+          path: 'backend/workers',
+          selectable: false,
+          streaming: false,
+          children: [
+            {
+              id: 'doc-agent',
+              documentId: 'doc-agent',
+              title: 'Agent Worker',
+              path: 'backend/workers/agent-worker',
+              markdown: undefined,
+              selectable: true,
+              streaming: true,
+              children: [],
+            },
+          ],
+        },
+      ],
+    },
+  ])
+})
+
 function documentArtifact(
   overrides: Partial<DocumentArtifactWithContent> = {},
 ): DocumentArtifactWithContent {
@@ -197,6 +286,24 @@ function documentArtifact(
     contentHash: 'sha256:doc',
     sizeBytes: 20,
     content: '# Overview',
+    ...overrides,
+  }
+}
+
+function documentTreeNode(overrides: Partial<DocumentTreeNode> = {}): DocumentTreeNode {
+  return {
+    nodeId: 'node-1',
+    nodeType: 'document',
+    documentId: 'doc-1',
+    title: 'Overview',
+    slug: 'overview',
+    path: 'overview',
+    focusArea: null,
+    sortOrder: 0,
+    status: 'draft',
+    version: 1,
+    sectionCount: 1,
+    children: [],
     ...overrides,
   }
 }

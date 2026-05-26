@@ -2,7 +2,11 @@ import { useEffect, useMemo } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 
 import { WorkspaceTopbar } from '../../components/WorkspaceTopbar'
-import { markdownNodesFromDocumentList, type DocumentArtifact } from '../../domain'
+import {
+  findFirstMarkdownDocument,
+  markdownNodesFromDocumentTree,
+  type DocumentTreeNode,
+} from '../../domain'
 import { MarkdownDocumentViewer } from '../markdown-viewer'
 import { useAnalysisDocumentsApi } from '../../hooks'
 
@@ -11,7 +15,7 @@ type AnalysisDocumentsPageProps = {
   apiBaseUrl?: string
 }
 
-const EMPTY_DOCUMENTS: DocumentArtifact[] = []
+const EMPTY_DOCUMENT_TREE: DocumentTreeNode[] = []
 
 export function AnalysisDocumentsPage({
   accessToken,
@@ -23,10 +27,15 @@ export function AnalysisDocumentsPage({
     documentId?: string
   }>()
   const documentsApi = useAnalysisDocumentsApi({ accessToken, baseUrl: apiBaseUrl })
-  const documents = documentsApi.documents.data?.items ?? EMPTY_DOCUMENTS
-  const activeDocumentId = documentId ?? documents[0]?.documentId ?? null
+  const documentTree = documentsApi.documentTree.data?.items ?? EMPTY_DOCUMENT_TREE
   const content = documentsApi.content.data
-  const loadDocuments = documentsApi.loadDocuments
+  const viewerDocuments = useMemo(
+    () => markdownNodesFromDocumentTree(documentTree, content),
+    [content, documentTree],
+  )
+  const fallbackDocument = useMemo(() => findFirstMarkdownDocument(viewerDocuments), [viewerDocuments])
+  const activeDocumentId = documentId ?? fallbackDocument?.documentId ?? null
+  const loadDocumentTree = documentsApi.loadDocumentTree
   const loadDocumentContent = documentsApi.loadDocumentContent
 
   useEffect(() => {
@@ -34,8 +43,8 @@ export function AnalysisDocumentsPage({
       return
     }
 
-    void loadDocuments(analysisId).catch(() => undefined)
-  }, [analysisId, loadDocuments])
+    void loadDocumentTree(analysisId).catch(() => undefined)
+  }, [analysisId, loadDocumentTree])
 
   useEffect(() => {
     if (!analysisId || !activeDocumentId) {
@@ -46,23 +55,18 @@ export function AnalysisDocumentsPage({
   }, [analysisId, activeDocumentId, loadDocumentContent])
 
   useEffect(() => {
-    if (!analysisId || documentId || documents.length === 0) {
+    if (!analysisId || documentId || !fallbackDocument?.documentId) {
       return
     }
 
-    navigate(documentRoute(analysisId, documents[0].documentId), { replace: true })
-  }, [analysisId, documentId, documents, navigate])
-
-  const viewerDocuments = useMemo(
-    () => markdownNodesFromDocumentList(documents, content),
-    [content, documents],
-  )
+    navigate(documentRoute(analysisId, fallbackDocument.documentId), { replace: true })
+  }, [analysisId, documentId, fallbackDocument, navigate])
 
   if (!analysisId) {
     return <Navigate to="/analysis" replace />
   }
 
-  if (documentsApi.documents.loading && documents.length === 0) {
+  if (documentsApi.documentTree.loading && documentTree.length === 0) {
     return (
       <main className="workspace workspace--documents" aria-label="文档预览">
         <WorkspaceTopbar title="文档预览" />
@@ -73,7 +77,7 @@ export function AnalysisDocumentsPage({
     )
   }
 
-  const error = documentsApi.documents.error ?? documentsApi.content.error
+  const error = documentsApi.documentTree.error ?? documentsApi.content.error
   if (error) {
     return (
       <main className="workspace workspace--documents" aria-label="文档预览">
@@ -87,7 +91,7 @@ export function AnalysisDocumentsPage({
     )
   }
 
-  if (documents.length === 0) {
+  if (documentTree.length === 0) {
     return (
       <main className="workspace workspace--documents" aria-label="文档预览">
         <WorkspaceTopbar title="文档预览" />

@@ -63,7 +63,7 @@ test('listAnalyses serializes filters and pagination cursor', async () => {
   assert.deepEqual(page, { items: [], nextCursor: 'next' })
 })
 
-test('listAnalysisSuggestions serializes repository query and maps lightweight analysis results', async () => {
+test('listAnalysisSuggestions uses repository search API and maps latest analysis results', async () => {
   let requestedUrl = ''
   const client = createDeepDiveApiClient({
     baseUrl: '/api',
@@ -79,9 +79,13 @@ test('listAnalysisSuggestions serializes repository query and maps lightweight a
             status: 'completed',
             repository_label: 'openai/codex',
             repository_url: 'https://github.com/openai/codex.git',
-            requested_ref: 'main',
-            resolved_commit_sha: 'abc123',
-            updated_at: '2026-05-24T00:00:00Z',
+            latest_analysis_id: 'analysis-1',
+            latest_status: 'completed',
+            latest_requested_ref: 'main',
+            latest_resolved_commit_sha: 'abc123',
+            analysis_count: 3,
+            completed_analysis_count: 2,
+            last_analyzed_at: '2026-05-24T00:00:00Z',
           },
         ],
       })
@@ -90,10 +94,13 @@ test('listAnalysisSuggestions serializes repository query and maps lightweight a
 
   const page = await client.listAnalysisSuggestions({ repositoryQuery: 'openai/codex', limit: 6 })
 
-  assert.equal(requestedUrl, '/api/analysis/suggestions?repository_query=openai%2Fcodex&limit=6')
+  assert.equal(requestedUrl, '/api/repositories/search?q=openai%2Fcodex&limit=6')
   assert.equal(page.items[0].analysisId, 'analysis-1')
+  assert.equal(page.items[0].status, 'completed')
   assert.equal(page.items[0].repositoryLabel, 'openai/codex')
   assert.equal(page.items[0].repositoryUrl, 'https://github.com/openai/codex.git')
+  assert.equal(page.items[0].requestedRef, 'main')
+  assert.equal(page.items[0].resolvedCommitSha, 'abc123')
 })
 
 test('request failures throw ApiError with backend error envelope', async () => {
@@ -345,6 +352,51 @@ test('document methods match backend analysis document API contracts', async () 
   assert.equal(revisions.items[0].toolCallId, 'tool-call-1')
 })
 
+test('document tree method reads backend nested document nodes', async () => {
+  const requests: Array<{ url: string; init: RequestInit }> = []
+  const client = createDeepDiveApiClient({
+    baseUrl: '/api',
+    accessToken: 'docs-token',
+    fetch: async (url, init = {}) => {
+      requests.push({ url: String(url), init })
+      return jsonResponse(200, {
+        items: [
+          backendDocumentTreeNode({
+            node_id: 'folder-1',
+            node_type: 'folder',
+            document_id: null,
+            title: 'Backend',
+            slug: 'backend',
+            path: 'backend',
+            status: null,
+            version: null,
+            children: [
+              backendDocumentTreeNode({
+                node_id: 'node-1',
+                document_id: 'document-1',
+                title: 'Authentication',
+                slug: 'authentication',
+                path: 'backend/authentication',
+                status: 'finalized',
+                version: 2,
+              }),
+            ],
+          }),
+        ],
+      })
+    },
+  })
+
+  const tree = await client.getAnalysisDocumentsTree('analysis-1')
+
+  assert.equal(requests[0].url, '/api/analysis/analysis-1/documents/tree')
+  assert.equal(headerValue(requests[0].init.headers, 'authorization'), 'Bearer docs-token')
+  assert.equal(tree.items[0].nodeId, 'folder-1')
+  assert.equal(tree.items[0].documentId, null)
+  assert.equal(tree.items[0].children[0].documentId, 'document-1')
+  assert.equal(tree.items[0].children[0].path, 'backend/authentication')
+})
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -393,6 +445,24 @@ function backendDocument(overrides: Record<string, unknown> = {}) {
     content_ref: 'objects/document-1.md',
     content_hash: 'sha256:document',
     size_bytes: 20,
+    ...overrides,
+  }
+}
+
+function backendDocumentTreeNode(overrides: Record<string, unknown> = {}) {
+  return {
+    node_id: 'node-1',
+    node_type: 'document',
+    document_id: 'document-1',
+    title: 'Repository review',
+    slug: 'repository-review',
+    path: 'repository-review',
+    focus_area: null,
+    sort_order: 0,
+    status: 'draft',
+    version: 1,
+    section_count: 3,
+    children: [],
     ...overrides,
   }
 }

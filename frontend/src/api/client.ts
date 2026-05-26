@@ -24,6 +24,7 @@ import type {
   DocumentArtifactWithContent,
   DocumentListPage,
   DocumentRevisionListPage,
+  DocumentTreePage,
 } from '../domain/documents.ts'
 import {
   type BackendAnalysis,
@@ -33,6 +34,7 @@ import {
   type BackendDocument,
   type BackendDocumentListPage,
   type BackendDocumentRevisionListPage,
+  type BackendDocumentTreePage,
   type BackendDocumentWithContent,
   type BackendErrorResponse,
   type BackendPermissionListPage,
@@ -48,6 +50,7 @@ import {
   fromBackendDocument,
   fromBackendDocumentListPage,
   fromBackendDocumentRevisionListPage,
+  fromBackendDocumentTreePage,
   fromBackendDocumentWithContent,
   fromBackendPermissionListPage,
   fromBackendRoleListPage,
@@ -87,6 +90,7 @@ export type DeepDiveApiClient = {
   listRoles(): Promise<RoleListPage>
   listPermissions(): Promise<PermissionListPage>
   listAnalysisDocuments(analysisId: string): Promise<DocumentListPage>
+  getAnalysisDocumentsTree(analysisId: string): Promise<DocumentTreePage>
   getAnalysisDocument(analysisId: string, documentId: string): Promise<DocumentArtifact>
   getAnalysisDocumentContent(
     analysisId: string,
@@ -208,8 +212,8 @@ export function createDeepDiveApiClient(
     },
 
     async listAnalysisSuggestions(input) {
-      const url = withSearchParams(urlFor(baseUrl, '/analysis/suggestions'), {
-        repository_query: input.repositoryQuery,
+      const url = withSearchParams(urlFor(baseUrl, '/repositories/search'), {
+        q: input.repositoryQuery,
         limit: input.limit,
       })
       const value = await requestJson<BackendAnalysisSuggestionListPage>(
@@ -293,6 +297,13 @@ export function createDeepDiveApiClient(
         `/analysis/${encodeURIComponent(analysisId)}/documents`,
       )
       return fromBackendDocumentListPage(value)
+    },
+
+    async getAnalysisDocumentsTree(analysisId) {
+      const value = await request<BackendDocumentTreePage>(
+        `/analysis/${encodeURIComponent(analysisId)}/documents/tree`,
+      )
+      return fromBackendDocumentTreePage(value)
     },
 
     async getAnalysisDocument(analysisId, documentId) {

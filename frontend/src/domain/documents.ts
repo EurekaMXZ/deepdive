@@ -17,6 +17,25 @@ export type DocumentArtifactWithContent = DocumentArtifact & {
   content: string
 }
 
+export type DocumentTreeNode = {
+  nodeId: string
+  nodeType: string
+  documentId: string | null
+  title: string
+  slug: string
+  path: string
+  focusArea: string | null
+  sortOrder: number
+  status: string | null
+  version: number | null
+  sectionCount: number
+  children: DocumentTreeNode[]
+}
+
+export type DocumentTreePage = {
+  items: DocumentTreeNode[]
+}
+
 export type DocumentRevision = {
   revisionId: string
   documentId: string

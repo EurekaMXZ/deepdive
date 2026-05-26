@@ -90,14 +90,18 @@ export type {
   DocumentListPage,
   DocumentRevision,
   DocumentRevisionListPage,
+  DocumentTreeNode,
+  DocumentTreePage,
 } from './documents.ts'
 export {
   buildMarkdownDocumentTree,
   extractMarkdownHeadings,
+  findFirstMarkdownDocument,
   findMarkdownDocument,
   flattenMarkdownDocuments,
   markdownNodesFromDocumentArtifacts,
   markdownNodesFromDocumentList,
+  markdownNodesFromDocumentTree,
 } from './markdown.ts'
 export type {
   MarkdownDocumentNode,

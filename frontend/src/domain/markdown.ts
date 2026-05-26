@@ -1,15 +1,17 @@
-import type { DocumentArtifact, DocumentArtifactWithContent } from './documents.ts'
+import type { DocumentArtifact, DocumentArtifactWithContent, DocumentTreeNode } from './documents.ts'
 
 export type MarkdownDocumentNode = {
   id: string
+  documentId?: string | null
   title: string
   path?: string
   markdown?: string
+  selectable?: boolean
   streaming?: boolean
   children?: MarkdownDocumentNode[]
 }
 
-export type MarkdownDocumentTreeNode = MarkdownDocumentNode & {
+export type MarkdownDocumentTreeNode = Omit<MarkdownDocumentNode, 'children'> & {
   active: boolean
   depth: number
   expanded: boolean
@@ -19,6 +21,7 @@ export type MarkdownDocumentTreeNode = MarkdownDocumentNode & {
 export type MarkdownHeading = {
   id: string
   depth: 1 | 2 | 3
+  line: number
   title: string
 }
 
@@ -42,6 +45,12 @@ export function findMarkdownDocument(
   return flattenMarkdownDocuments(documents).find((document) => document.id === documentId) ?? null
 }
 
+export function findFirstMarkdownDocument(
+  documents: readonly MarkdownDocumentNode[],
+): MarkdownDocumentNode | null {
+  return flattenMarkdownDocuments(documents).find((document) => document.selectable !== false) ?? null
+}
+
 export function buildMarkdownDocumentTree(
   documents: readonly MarkdownDocumentNode[],
   activeDocumentId: string | null,
@@ -54,7 +63,7 @@ export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
   const usedSlugs = new Map<string, number>()
   let inFence = false
 
-  for (const line of markdown.split(/\r?\n/)) {
+  for (const [index, line] of markdown.split(/\r?\n/).entries()) {
     if (/^\s*(```|~~~)/.test(line)) {
       inFence = !inFence
       continue
@@ -76,6 +85,7 @@ export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
     headings.push({
       id: uniqueSlug(slugify(title), usedSlugs),
       depth: match[1].length as MarkdownHeading['depth'],
+      line: index + 1,
       title,
     })
   }
@@ -115,6 +125,15 @@ export function markdownNodesFromDocumentList(
     }))
 }
 
+export function markdownNodesFromDocumentTree(
+  nodes: DocumentTreeNode[],
+  activeDocumentContent: DocumentArtifactWithContent | null,
+): MarkdownDocumentNode[] {
+  return nodes
+    .map((node) => markdownNodeFromDocumentTreeNode(node, activeDocumentContent))
+    .sort(compareMarkdownDocumentNodes)
+}
+
 function isStreamingDocumentStatus(status: string): boolean {
   return status === 'generating' || status === 'streaming' || status === 'in_progress' || status === 'updating'
 }
@@ -134,6 +153,37 @@ function documentStatusRank(status: string): number {
     return 1
   }
   return 2
+}
+
+function markdownNodeFromDocumentTreeNode(
+  node: DocumentTreeNode,
+  activeDocumentContent: DocumentArtifactWithContent | null,
+): MarkdownDocumentNode {
+  const documentId = node.documentId
+  const selectable = documentId !== null
+
+  const markdownNode: MarkdownDocumentNode = {
+    id: documentId ?? node.nodeId,
+    documentId,
+    title: node.title,
+    path: node.path,
+    selectable,
+    streaming: node.status === null ? false : isStreamingDocumentStatus(node.status),
+    children: node.children
+      .map((child) => markdownNodeFromDocumentTreeNode(child, activeDocumentContent))
+      .sort(compareMarkdownDocumentNodes),
+  }
+
+  if (documentId !== null) {
+    markdownNode.markdown =
+      activeDocumentContent?.documentId === documentId ? activeDocumentContent.content : undefined
+  }
+
+  return markdownNode
+}
+
+function compareMarkdownDocumentNodes(left: MarkdownDocumentNode, right: MarkdownDocumentNode): number {
+  return (left.path ?? left.title).localeCompare(right.path ?? right.title)
 }
 
 function buildTreeNode(

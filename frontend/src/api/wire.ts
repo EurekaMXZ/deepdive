@@ -22,6 +22,8 @@ import type {
   DocumentListPage,
   DocumentRevision,
   DocumentRevisionListPage,
+  DocumentTreeNode,
+  DocumentTreePage,
 } from '../domain/documents.ts'
 
 export type BackendAnalysis = {
@@ -52,15 +54,15 @@ export type BackendAnalysisListPage = {
 }
 
 export type BackendAnalysisSuggestion = {
-  analysis_id: string
-  agent_id: string
-  snapshot_id: string | null
-  status: AnalysisStatus
   repository_label: string
   repository_url: string
-  requested_ref: string
-  resolved_commit_sha: string | null
-  updated_at: string
+  latest_analysis_id: string
+  latest_status: AnalysisStatus
+  latest_requested_ref: string
+  latest_resolved_commit_sha: string | null
+  analysis_count: number
+  completed_analysis_count: number
+  last_analyzed_at: string
 }
 
 export type BackendAnalysisSuggestionListPage = {
@@ -157,6 +159,25 @@ export type BackendDocumentListPage = {
   items: BackendDocument[]
 }
 
+export type BackendDocumentTreeNode = {
+  node_id: string
+  node_type: string
+  document_id: string | null
+  title: string
+  slug: string
+  path: string
+  focus_area: string | null
+  sort_order: number
+  status: string | null
+  version: number | null
+  section_count: number
+  children: BackendDocumentTreeNode[]
+}
+
+export type BackendDocumentTreePage = {
+  items: BackendDocumentTreeNode[]
+}
+
 export type BackendDocumentRevisionListPage = {
   items: BackendDocumentRevision[]
 }
@@ -202,15 +223,15 @@ export function fromBackendAnalysisSuggestion(
   value: BackendAnalysisSuggestion,
 ): AnalysisSuggestion {
   return {
-    analysisId: value.analysis_id,
-    agentId: value.agent_id,
-    snapshotId: value.snapshot_id,
-    status: value.status,
+    analysisId: value.latest_analysis_id,
+    agentId: '',
+    snapshotId: null,
+    status: value.latest_status,
     repositoryLabel: value.repository_label,
     repositoryUrl: value.repository_url,
-    requestedRef: value.requested_ref,
-    resolvedCommitSha: value.resolved_commit_sha,
-    updatedAt: value.updated_at,
+    requestedRef: value.latest_requested_ref,
+    resolvedCommitSha: value.latest_resolved_commit_sha,
+    updatedAt: value.last_analyzed_at,
   }
 }
 
@@ -317,6 +338,29 @@ export function fromBackendDocumentListPage(
 ): DocumentListPage {
   return {
     items: value.items.map(fromBackendDocument),
+  }
+}
+
+export function fromBackendDocumentTreeNode(value: BackendDocumentTreeNode): DocumentTreeNode {
+  return {
+    nodeId: value.node_id,
+    nodeType: value.node_type,
+    documentId: value.document_id,
+    title: value.title,
+    slug: value.slug,
+    path: value.path,
+    focusArea: value.focus_area,
+    sortOrder: value.sort_order,
+    status: value.status,
+    version: value.version,
+    sectionCount: value.section_count,
+    children: value.children.map(fromBackendDocumentTreeNode),
+  }
+}
+
+export function fromBackendDocumentTreePage(value: BackendDocumentTreePage): DocumentTreePage {
+  return {
+    items: value.items.map(fromBackendDocumentTreeNode),
   }
 }
 

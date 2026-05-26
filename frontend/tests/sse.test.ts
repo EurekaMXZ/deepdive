@@ -70,6 +70,40 @@ test('normalizes backend persisted and live model events into analysis stream ev
 
   assert.deepEqual(
     normalizeAnalysisSseEvent({
+      id: '8',
+      event: 'agent_message',
+      data: {
+        type: 'agent_message',
+        text: '阶段性说明',
+        response_id: 'resp_1',
+        item_id: 'msg_1',
+        phase: 'commentary',
+      },
+      rawData: '{}',
+    }),
+    {
+      kind: 'output_delta',
+      replayId: '8',
+      text: '阶段性说明',
+    },
+  )
+
+  assert.deepEqual(
+    normalizeAnalysisSseEvent({
+      id: '9',
+      event: 'response.commentary.output_text.delta',
+      data: { type: 'response.commentary.output_text.delta', delta: 'commentary 增量' },
+      rawData: '{}',
+    }),
+    {
+      kind: 'output_delta',
+      replayId: '9',
+      text: 'commentary 增量',
+    },
+  )
+
+  assert.deepEqual(
+    normalizeAnalysisSseEvent({
       event: 'model_reasoning_summary.delta',
       data: { type: 'model_reasoning_summary.delta', text: '隐藏的增量' },
       rawData: '{}',

@@ -31,6 +31,7 @@ import type {
   DocumentArtifactWithContent,
   DocumentListPage,
   DocumentRevisionListPage,
+  DocumentTreePage,
 } from '../domain/documents.ts'
 import { subscribeAnalysisEvents } from '../api/sse.ts'
 
@@ -220,6 +221,11 @@ export function useAnalysisDocumentsApi(options: UseAnalysisApiOptions = {}) {
     loading: false,
     error: null,
   })
+  const [documentTreeState, setDocumentTreeState] = useState<AsyncState<DocumentTreePage>>({
+    data: null,
+    loading: false,
+    error: null,
+  })
   const [documentState, setDocumentState] = useState<AsyncState<DocumentArtifact>>({
     data: null,
     loading: false,
@@ -238,12 +244,18 @@ export function useAnalysisDocumentsApi(options: UseAnalysisApiOptions = {}) {
 
   return {
     documents: documentsState,
+    documentTree: documentTreeState,
     document: documentState,
     content: contentState,
     revisions: revisionsState,
     loadDocuments: useCallback(
       (analysisId: AnalysisId) =>
         runAsync(setDocumentsState, () => client.listAnalysisDocuments(analysisId)),
+      [client],
+    ),
+    loadDocumentTree: useCallback(
+      (analysisId: AnalysisId) =>
+        runAsync(setDocumentTreeState, () => client.getAnalysisDocumentsTree(analysisId)),
       [client],
     ),
     loadDocument: useCallback(
