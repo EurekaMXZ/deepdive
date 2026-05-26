@@ -7,7 +7,6 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import String, bindparam, text
-from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.agent.context_items import (
     FUNCTION_CALL_OUTPUT_ITEM_TYPE,
@@ -16,6 +15,7 @@ from backend.agent.context_items import (
     function_call_output_payload,
     tool_output_idempotency_key,
 )
+from backend.agent.repository_stream import add_stream_event_on_connection
 from backend.db.connections import AsyncDbConnection, ConnectionSource, connection_from
 from backend.events import EventEnvelope
 from backend.events.repositories import DbOutboxSink
@@ -485,6 +485,7 @@ class PostgresToolCallRepository:
                 agent_id=agent_id,
                 event_type="tool_result",
                 payload=result,
+                idempotency_key=_tool_result_stream_idempotency_key(result),
             )
             await DbOutboxSink(connection).add(event)
         return True
@@ -499,6 +500,7 @@ class PostgresToolCallRepository:
                 agent_id=agent_id,
                 event_type=event_type,
                 payload=payload,
+                idempotency_key=_tool_result_stream_idempotency_key(payload) if event_type == "tool_result" else None,
             )
 
     async def _add_stream_event_on_connection(
@@ -509,37 +511,15 @@ class PostgresToolCallRepository:
         agent_id: UUID,
         event_type: str,
         payload: dict[str, Any],
+        idempotency_key: str | None = None,
     ) -> None:
-        await connection.scalar(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:analysis_id, 0))"),
-            {"analysis_id": str(analysis_id)},
-        )
-        seq = await connection.scalar(
-            text("SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_stream_events WHERE analysis_id = :analysis_id"),
-            {"analysis_id": analysis_id},
-        )
-        await connection.execute(
-            text(
-                """
-                INSERT INTO agent_stream_events (
-                    id, analysis_id, agent_id, turn_id, seq, event_type,
-                    payload_json, attempt, response_id, state, created_at
-                )
-                VALUES (
-                    :id, :analysis_id, :agent_id, NULL, :seq, :event_type,
-                    :payload_json, NULL, NULL, NULL, :created_at
-                )
-                """
-            ).bindparams(bindparam("payload_json", type_=JSONB)),
-            {
-                "id": new_uuid7(),
-                "analysis_id": analysis_id,
-                "agent_id": agent_id,
-                "seq": seq,
-                "event_type": event_type,
-                "payload_json": payload,
-                "created_at": datetime.now(UTC),
-            },
+        await add_stream_event_on_connection(
+            connection,
+            analysis_id=analysis_id,
+            agent_id=agent_id,
+            event_type=event_type,
+            payload=payload,
+            idempotency_key=idempotency_key,
         )
 
     async def add_outbox(self, event: EventEnvelope) -> None:
@@ -660,3 +640,10 @@ def _escape_like(value: str) -> str:
         else:
             escaped.append(char)
     return "".join(escaped)
+
+
+def _tool_result_stream_idempotency_key(payload: dict[str, Any]) -> str | None:
+    tool_call_id = payload.get("tool_call_id")
+    if tool_call_id is None:
+        return None
+    return f"tool_result:{tool_call_id}"

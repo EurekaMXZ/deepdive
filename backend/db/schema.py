@@ -357,10 +357,18 @@ agent_stream_events = Table(
     Column("attempt", Integer),
     Column("response_id", Text),
     Column("state", Text),
+    Column("idempotency_key", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 Index("uq_agent_stream_events_analysis_seq", agent_stream_events.c.analysis_id, agent_stream_events.c.seq, unique=True)
 Index("ix_agent_stream_events_agent_seq", agent_stream_events.c.agent_id, agent_stream_events.c.seq)
+Index(
+    "uq_agent_stream_events_agent_idempotency",
+    agent_stream_events.c.agent_id,
+    agent_stream_events.c.idempotency_key,
+    unique=True,
+    postgresql_where=agent_stream_events.c.idempotency_key.isnot(None),
+)
 
 
 agent_context_items = Table(

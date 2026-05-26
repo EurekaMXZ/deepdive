@@ -29,6 +29,7 @@ class AgentStreamStore:
         attempt: int | None = None,
         response_id: str | None = None,
         state: str | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         async with self._connection() as connection:
             await add_stream_event_on_connection(
@@ -41,6 +42,7 @@ class AgentStreamStore:
                 attempt=attempt,
                 response_id=response_id,
                 state=state,
+                idempotency_key=idempotency_key,
             )
 
 
@@ -55,6 +57,7 @@ async def add_stream_event_on_connection(
     attempt: int | None = None,
     response_id: str | None = None,
     state: str | None = None,
+    idempotency_key: str | None = None,
 ) -> None:
     await connection.scalar(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:analysis_id, 0))"),
@@ -75,12 +78,15 @@ async def add_stream_event_on_connection(
             """
             INSERT INTO agent_stream_events (
                 id, analysis_id, agent_id, turn_id, seq, event_type,
-                payload_json, attempt, response_id, state, created_at
+                payload_json, attempt, response_id, state, idempotency_key, created_at
             )
             VALUES (
                 :id, :analysis_id, :agent_id, :turn_id, :seq, :event_type,
-                :payload_json, :attempt, :response_id, :state, :created_at
+                :payload_json, :attempt, :response_id, :state, :idempotency_key, :created_at
             )
+            ON CONFLICT (agent_id, idempotency_key)
+            WHERE idempotency_key IS NOT NULL
+            DO NOTHING
             """
         ).bindparams(bindparam("payload_json", type_=JSONB)),
         {
@@ -94,6 +100,7 @@ async def add_stream_event_on_connection(
             "attempt": attempt,
             "response_id": response_id,
             "state": state,
+            "idempotency_key": idempotency_key,
             "created_at": datetime.now(UTC),
         },
     )

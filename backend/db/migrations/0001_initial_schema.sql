@@ -249,6 +249,7 @@ CREATE TABLE agent_stream_events (
     attempt integer,
     response_id text,
     state text,
+    idempotency_key text,
     created_at timestamptz not null
 );
 
@@ -573,6 +574,10 @@ CREATE UNIQUE INDEX uq_agent_stream_events_analysis_seq
 
 CREATE INDEX ix_agent_stream_events_agent_seq
     ON agent_stream_events (agent_id, seq);
+
+CREATE UNIQUE INDEX uq_agent_stream_events_agent_idempotency
+    ON agent_stream_events (agent_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 CREATE UNIQUE INDEX uq_agent_context_items_agent_seq
     ON agent_context_items (agent_id, seq);

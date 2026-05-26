@@ -184,6 +184,11 @@ class DatabaseSchemaTest(unittest.TestCase):
         self.assertIn("attempt", stream.c)
         self.assertIn("response_id", stream.c)
         self.assertIn("state", stream.c)
+        self.assertIn("idempotency_key", stream.c)
+        self.assertIn(
+            ("agent_id", "idempotency_key"),
+            {_columns(index) for index in stream.indexes if index.unique},
+        )
         self.assertIn("seq", context_items.c)
         self.assertIn("item_type", context_items.c)
         self.assertIn("payload_json", context_items.c)

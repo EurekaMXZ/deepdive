@@ -350,6 +350,43 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stream_insert["payload_json"]["tool_call_id"], str(tool_call_id))
         self.assertEqual(outbox_insert["payload_json"]["payload"]["tool_call_id"], str(tool_call_id))
 
+    async def test_request_tool_call_writes_idempotent_stream_event_for_openai_call_id(self) -> None:
+        tool_call_id = new_uuid7()
+        connection = FakeConnection(rows=[{"id": tool_call_id}], scalar_values=[None, 12])
+        repository = PostgresAgentRepository(connection)
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+
+        await repository.request_tool_call(
+            tool_call_kwargs={
+                "agent_id": agent_id,
+                "turn_id": new_uuid7(),
+                "snapshot_id": new_uuid7(),
+                "openai_call_id": "call_1",
+                "tool_name": "read_file",
+                "arguments_json": {"path": "README.md"},
+                "tool_registry_version": DEFAULT_TOOL_REGISTRY_VERSION,
+                "tool_schema_hash": "sha256:schema",
+                "tool_policy_hash": "sha256:policy",
+                "status": "queued",
+            },
+            analysis_id=analysis_id,
+            agent_id=agent_id,
+            stream_event_type="tool_call",
+            stream_payload={"tool_name": "read_file", "arguments": {"path": "README.md"}},
+            event=EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_REQUESTED,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                payload={"openai_call_id": "call_1"},
+            ),
+        )
+
+        stream_insert = _first_executed_params(connection, "INSERT INTO agent_stream_events")
+        self.assertEqual(stream_insert["idempotency_key"], "tool_call:call_1")
+        self.assertIn("idempotency_key", str(_first_executed_statement(connection, "INSERT INTO agent_stream_events")))
+        self.assertIn("ON CONFLICT", str(_first_executed_statement(connection, "INSERT INTO agent_stream_events")))
+
     async def test_complete_turn_with_tool_call_is_atomic(self) -> None:
         tool_call_id = new_uuid7()
         connection = FakeConnection(rows=[{"id": tool_call_id}], scalar_values=[None, 12, 13])
@@ -1001,6 +1038,13 @@ def _first_executed_params(connection: FakeConnection, sql_fragment: str) -> dic
     for statement, params in connection.executed:
         if sql_fragment in str(statement):
             return params
+    raise AssertionError(f"SQL fragment not executed: {sql_fragment}")
+
+
+def _first_executed_statement(connection: FakeConnection, sql_fragment: str) -> object:
+    for statement, _ in connection.executed:
+        if sql_fragment in str(statement):
+            return statement
     raise AssertionError(f"SQL fragment not executed: {sql_fragment}")
 
 

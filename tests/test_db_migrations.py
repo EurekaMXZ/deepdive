@@ -124,6 +124,12 @@ class DatabaseMigrationTest(unittest.TestCase):
         self.assertRegex(stream_body, r"\battempt\s+integer\b")
         self.assertRegex(stream_body, r"\bresponse_id\s+text\b")
         self.assertRegex(stream_body, r"\bstate\s+text\b")
+        self.assertRegex(stream_body, r"\bidempotency_key\s+text\b")
+        self.assertRegex(
+            sql,
+            r"create\s+unique\s+index\s+uq_agent_stream_events_agent_idempotency\s+on\s+agent_stream_events"
+            r"\s+\(agent_id,\s*idempotency_key\)",
+        )
         context_items_body = _create_table_body(sql, "agent_context_items")
         self.assertRegex(context_items_body, r"\bseq\s+bigint\s+not\s+null\b")
         self.assertRegex(context_items_body, r"\bitem_type\s+text\s+not\s+null\b")

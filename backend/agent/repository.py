@@ -33,6 +33,8 @@ from backend.events import EventEnvelope
 from backend.events.repositories import DbOutboxSink
 from backend.ids import new_uuid7
 
+TOOL_STREAM_EVENT_TYPES = frozenset({"tool_call", "tool_result"})
+
 
 class PostgresAgentRepository:
     def __init__(self, connection_or_database: ConnectionSource) -> None:
@@ -234,6 +236,7 @@ class PostgresAgentRepository:
         attempt: int | None = None,
         response_id: str | None = None,
         state: str | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         await self._stream_store.add_stream_event(
             analysis_id=analysis_id,
@@ -244,6 +247,7 @@ class PostgresAgentRepository:
             attempt=attempt,
             response_id=response_id,
             state=state,
+            idempotency_key=idempotency_key,
         )
 
     async def append_context_item(
@@ -325,6 +329,7 @@ class PostgresAgentRepository:
         attempt: int | None = None,
         response_id: str | None = None,
         state: str | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         await add_stream_event_on_connection(
             connection,
@@ -336,6 +341,7 @@ class PostgresAgentRepository:
             attempt=attempt,
             response_id=response_id,
             state=state,
+            idempotency_key=idempotency_key,
         )
 
     async def update_session_status(self, *, agent_id: UUID, status: str) -> None:
@@ -478,6 +484,10 @@ class PostgresAgentRepository:
                 payload=payload,
                 turn_id=tool_call_kwargs.get("turn_id"),
                 state="completed",
+                idempotency_key=_tool_stream_event_idempotency_key(
+                    event_type=stream_event_type,
+                    openai_call_id=str(tool_call_kwargs["openai_call_id"]),
+                ),
             )
             event.payload["tool_call_id"] = str(tool_call_id)
             await DbOutboxSink(connection).add(event)
@@ -570,6 +580,10 @@ class PostgresAgentRepository:
                 turn_id=turn_id,
                 response_id=response_id,
                 state="completed",
+                idempotency_key=_tool_stream_event_idempotency_key(
+                    event_type=stream_event_type,
+                    openai_call_id=str(context_tool_call_kwargs["openai_call_id"]),
+                ),
             )
             event.payload["tool_call_id"] = str(tool_call_id)
             await DbOutboxSink(connection).add(event)
@@ -664,6 +678,10 @@ class PostgresAgentRepository:
                     turn_id=turn_id,
                     response_id=response_id,
                     state="completed",
+                    idempotency_key=_tool_stream_event_idempotency_key(
+                        event_type=str(request["stream_event_type"]),
+                        openai_call_id=str(tool_call_kwargs["openai_call_id"]),
+                    ),
                 )
                 event = request["event"]
                 event.payload["tool_call_id"] = str(tool_call_id)
@@ -1211,3 +1229,9 @@ def _json_or_none(value: Any) -> str | None:
     import json
 
     return json.dumps(value, ensure_ascii=False)
+
+
+def _tool_stream_event_idempotency_key(*, event_type: str, openai_call_id: str) -> str | None:
+    if event_type not in TOOL_STREAM_EVENT_TYPES:
+        return None
+    return f"{event_type}:{openai_call_id}"
