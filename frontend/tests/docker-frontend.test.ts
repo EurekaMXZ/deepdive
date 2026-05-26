@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
-const compose = readFileSync(resolve('..', 'docker-compose.yml'), 'utf8')
-const dockerignore = readFileSync(resolve('..', '.dockerignore'), 'utf8')
+const compose = readFileSync(resolve('..', 'docker-compose.yml'), 'utf8').replace(/\r\n/g, '\n')
+const dockerignore = readFileSync(resolve('..', '.dockerignore'), 'utf8').replace(/\r\n/g, '\n')
 const frontendDockerfilePath = resolve('Dockerfile')
 const nginxConfigPath = resolve('nginx.conf')
 

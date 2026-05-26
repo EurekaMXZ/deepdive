@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
-const appCss = readFileSync(resolve('src/App.css'), 'utf8')
+const appCss = readFileSync(resolve('src/App.css'), 'utf8').replace(/\r\n/g, '\n')
 
 test('analysis detail layout uses a single stream column without a right activity timeline', () => {
   assertCssRule('.app-shell', ['height: 100svh', 'min-height: 0', 'overflow: hidden'])
@@ -54,7 +54,9 @@ test('analysis cancellation controls use compact table and header affordances', 
   assertCssRule('.analysis-submissions__toolbar', ['justify-content: space-between'])
   assertCssRule('.analysis-submissions__selection', ['display: inline-flex'])
   assertCssRule('.analysis-bulk-cancel-button', ['min-height: 34px'])
+  assertCssRule('.analysis-list', ['overflow-x: auto'])
   assertCssRule('.analysis-list__head,\n.analysis-list__row', [
+    'min-width: 760px',
     'grid-template-columns: 34px minmax(220px, 1.65fr) minmax(82px, 0.42fr) minmax(108px, 0.52fr) minmax(138px, 0.68fr) 72px 86px',
   ])
   assertCssRule('.analysis-list__select', ['display: inline-flex'])
@@ -170,6 +172,12 @@ test('mobile layout hides the sidebar behind a menu button while keeping workspa
   assertCssRuleInMedia('@media (max-width: 900px)', '.workspace-topbar__inner', [
     'padding-left: calc(var(--workspace-topbar-padding-x) + 42px)',
   ])
+  assertCssRuleInMedia('@media (max-width: 900px)', '.analysis-submissions__toolbar', [
+    'flex-wrap: wrap',
+  ])
+  assertCssRuleInMedia('@media (max-width: 900px)', '.analysis-submissions__selection', [
+    'flex-wrap: wrap',
+  ])
   assertCssRuleAbsentInMedia('@media (max-width: 560px)', '.sidebar__nav')
 })
 
@@ -201,8 +209,10 @@ test('workspace pages share the same content rail', () => {
     'width: min(var(--workspace-page-width), 100%)',
     'justify-self: center',
     'min-height: 0',
+    'overflow: auto',
     'padding: 28px var(--workspace-page-padding-x) 32px',
   ])
+  assertCssRule('.workspace-body--full', ['overflow: hidden'])
 })
 
 test('core app type scale stays compact for workspace UI', () => {

@@ -15,7 +15,7 @@ const analysisPreview = readFileSync(
   resolve('src/features/analysis-preview/AnalysisPreview.tsx'),
   'utf8',
 )
-const appCss = readFileSync(resolve('src/App.css'), 'utf8')
+const appCss = readFileSync(resolve('src/App.css'), 'utf8').replace(/\r\n/g, '\n')
 
 test('analysis submissions table supports row navigation, selection, and cancel actions', () => {
   assert.match(analysisList, /aria-label="选择全部可取消任务"/)

@@ -480,13 +480,14 @@
   width: min(var(--workspace-page-width), 100%);
   justify-self: center;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   padding: 28px var(--workspace-page-padding-x) 32px;
 }
 
 .workspace-body--full {
   width: 100%;
   height: 100%;
+  overflow: hidden;
   padding: 0;
 }
 
@@ -776,13 +777,14 @@
 
 .analysis-list {
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   border-top: 1px solid #202020;
 }
 
 .analysis-list__head,
 .analysis-list__row {
-  min-width: 0;
+  min-width: 760px;
   display: grid;
   grid-template-columns: 34px minmax(220px, 1.65fr) minmax(82px, 0.42fr) minmax(108px, 0.52fr) minmax(138px, 0.68fr) 72px 86px;
   align-items: center;
@@ -2306,6 +2308,24 @@ input:focus-visible {
     padding: 22px 18px 36px;
   }
 
+  .analysis-submissions__toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .analysis-submissions__selection,
+  .analysis-submissions__actions {
+    flex: 1 1 260px;
+  }
+
+  .analysis-submissions__selection {
+    flex-wrap: wrap;
+  }
+
+  .analysis-submissions__actions {
+    justify-content: flex-end;
+  }
+
   .analysis-todo-dock {
     width: min(300px, calc(100% - 28px));
     position: absolute;
@@ -2393,5 +2413,12 @@ input:focus-visible {
 
   .analysis-preview__message--user {
     max-width: 100%;
+  }
+
+  .analysis-submissions__selection,
+  .analysis-submissions__actions,
+  .analysis-submit-button,
+  .analysis-bulk-cancel-button {
+    width: 100%;
   }
 }
