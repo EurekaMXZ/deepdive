@@ -193,6 +193,7 @@ class ExecutionCommandHandler:
                     dict(row["arguments_json"]),
                     config=app_config_from_json(row.get("config_json")),
                 )
+                result = _tool_result_with_id(result, tool_call_id=tool_call_id)
         except Exception:
             await self._release_claim(tool_call_id=tool_call_id, claim_owner=claim_owner)
             raise
@@ -249,6 +250,7 @@ class ExecutionCommandHandler:
                 "retryable": False,
             },
         }
+        result = _tool_result_with_id(result, tool_call_id=tool_call_id)
         error = _error_payload(result)
         outbox_event = EventEnvelope.new(
             event_type=EventType.TOOL_CALL_FAILED,
@@ -437,3 +439,9 @@ def _error_payload(result: Mapping[str, Any]) -> dict[str, Any]:
         "message": str(error.get("message") or "Tool call failed"),
         "retryable": bool(error.get("retryable", False)),
     }
+
+
+def _tool_result_with_id(result: dict[str, Any], *, tool_call_id: UUID) -> dict[str, Any]:
+    payload = dict(result)
+    payload["tool_call_id"] = str(tool_call_id)
+    return payload

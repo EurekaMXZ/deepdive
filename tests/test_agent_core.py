@@ -957,6 +957,151 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.session_statuses, [])
         self.assertEqual(repository.tool_output_turn_queries, [turn_id])
 
+    async def test_waiting_tool_ignores_agent_continue_until_tool_terminal_event(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="waiting_tool",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=1,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_ignored",
+                output_text="should not call model",
+                tool_calls=[],
+                usage={},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.AGENT_CONTINUE_REQUESTED,
+                analysis_id=repository.session.analysis_id,
+                agent_id=repository.session.agent_id,
+                snapshot_id=repository.session.snapshot_id,
+                payload={"reason": "manual_retry"},
+            )
+        )
+
+        self.assertEqual(runner.requests, [])
+        self.assertEqual(repository.start_turn_calls, 0)
+        self.assertEqual(repository.session_statuses, [])
+        self.assertNotIn("status", [event["event_type"] for event in repository.stream_events])
+
+    async def test_waiting_tool_ignores_snapshot_ready_until_tool_terminal_event(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="waiting_tool",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=1,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_ignored",
+                output_text="should not call model",
+                tool_calls=[],
+                usage={},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=repository.session.analysis_id,
+                agent_id=repository.session.agent_id,
+                snapshot_id=repository.session.snapshot_id,
+                payload={},
+            )
+        )
+
+        self.assertEqual(runner.requests, [])
+        self.assertEqual(repository.start_turn_calls, 0)
+        self.assertEqual(repository.session_statuses, [])
+        self.assertNotIn("status", [event["event_type"] for event in repository.stream_events])
+
+    async def test_tool_completed_without_persisted_output_does_not_start_model(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="waiting_tool",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=1,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            pending_tool_output=None,
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_ignored",
+                output_text="should not call model",
+                tool_calls=[],
+                usage={},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.TOOL_CALL_COMPLETED,
+                analysis_id=repository.session.analysis_id,
+                agent_id=repository.session.agent_id,
+                snapshot_id=repository.session.snapshot_id,
+                payload={"tool_call_id": str(repository.tool_call_id)},
+            )
+        )
+
+        self.assertEqual(runner.requests, [])
+        self.assertEqual(repository.start_turn_calls, 0)
+        self.assertEqual(repository.session_statuses, [])
+        self.assertNotIn("status", [event["event_type"] for event in repository.stream_events])
+
     async def test_parallel_tool_result_fans_in_all_ready_outputs_with_previous_response_id(self) -> None:
         turn_id = new_uuid7()
         tool_call_id = new_uuid7()

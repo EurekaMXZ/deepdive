@@ -65,6 +65,8 @@ class AgentCommandHandler:
             raise ValueError("Agent session not found")
         if session.status in TERMINAL_SESSION_STATUSES:
             return
+        if session.status == "waiting_tool" and not _is_terminal_tool_event(event):
+            return
         trigger_domain_key = _trigger_domain_key(event)
         existing_turn = await self._turn_for_trigger(
             agent_id=session.agent_id,
@@ -109,15 +111,15 @@ class AgentCommandHandler:
         if session.turn_count >= session.max_turns:
             await self._fail_max_turns_exceeded(event=event, session=session)
             return
+        max_tool_calls = int(session.effective_limits_json.get("max_tool_calls") or 0)
+        if max_tool_calls > 0 and await self._count_tool_calls(agent_id=session.agent_id) >= max_tool_calls:
+            await self._fail_max_tool_calls_exceeded(event=event, session=session, max_tool_calls=max_tool_calls)
+            return
         ready_tool_outputs = None
         if _is_terminal_tool_event(event):
             ready_tool_outputs = await self._ready_tool_outputs(event)
             if ready_tool_outputs is None:
                 return
-        max_tool_calls = int(session.effective_limits_json.get("max_tool_calls") or 0)
-        if max_tool_calls > 0 and await self._count_tool_calls(agent_id=session.agent_id) >= max_tool_calls:
-            await self._fail_max_tool_calls_exceeded(event=event, session=session, max_tool_calls=max_tool_calls)
-            return
 
         await self._repository.update_session_status(agent_id=session.agent_id, status="calling_model")
         await self._repository.add_stream_event(
@@ -869,7 +871,7 @@ class AgentCommandHandler:
                 ),
             }
         if output is None:
-            return []
+            return None if event.event_type == EventType.TOOL_CALL_COMPLETED else []
         turn_id = output.get("turn_id")
         load_ready_tool_outputs = getattr(self._repository, "load_ready_tool_outputs_for_turn", None)
         if turn_id is not None and load_ready_tool_outputs is not None:

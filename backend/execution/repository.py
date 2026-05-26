@@ -479,13 +479,14 @@ class PostgresToolCallRepository:
                 tool_call_id=tool_call_id,
                 result=result,
             )
+            stream_payload = _tool_result_stream_payload(result, tool_call_id=tool_call_id)
             await self._add_stream_event_on_connection(
                 connection,
                 analysis_id=analysis_id,
                 agent_id=agent_id,
                 event_type="tool_result",
-                payload=result,
-                idempotency_key=_tool_result_stream_idempotency_key(result),
+                payload=stream_payload,
+                idempotency_key=_tool_result_stream_idempotency_key(stream_payload),
             )
             await DbOutboxSink(connection).add(event)
         return True
@@ -647,3 +648,9 @@ def _tool_result_stream_idempotency_key(payload: dict[str, Any]) -> str | None:
     if tool_call_id is None:
         return None
     return f"tool_result:{tool_call_id}"
+
+
+def _tool_result_stream_payload(result: dict[str, Any], *, tool_call_id: UUID) -> dict[str, Any]:
+    payload = dict(result)
+    payload["tool_call_id"] = str(tool_call_id)
+    return payload

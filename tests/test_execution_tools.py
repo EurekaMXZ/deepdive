@@ -1683,6 +1683,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.failed[0]["status"], "denied")
         self.assertEqual(repository.failed[0]["permission_decision"], "deny")
         self.assertFalse(repository.failed[0]["result"]["ok"])
+        self.assertEqual(repository.failed[0]["result"]["tool_call_id"], str(tool_call_id))
         self.assertEqual(repository.failed[0]["result"]["error"]["code"], "UNSAFE_PATH")
         self.assertEqual(repository.stream_events[0]["event_type"], "tool_result")
         self.assertEqual(repository.outbox_events[0].event_type, EventType.TOOL_CALL_DENIED)
@@ -1732,6 +1733,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.failed[0]["status"], "failed")
         self.assertEqual(repository.failed[0]["permission_decision"], "allow")
         self.assertEqual(repository.failed[0]["error_code"], "SEARCH_TEXT_FAILED")
+        self.assertEqual(repository.failed[0]["result"]["tool_call_id"], str(tool_call_id))
         self.assertEqual(repository.stream_events[0]["event_type"], "tool_result")
         self.assertEqual(repository.outbox_events[0].event_type, EventType.TOOL_CALL_FAILED)
         self.assertEqual(repository.outbox_events[0].payload["error"]["message"], "ripgrep failed")
@@ -1856,6 +1858,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executor.calls, 0)
         self.assertEqual(repository.failed[0]["status"], "cancelled")
         self.assertEqual(repository.failed[0]["error_code"], "TOOL_CALL_CANCELLED")
+        self.assertEqual(repository.failed[0]["result"]["tool_call_id"], str(tool_call_id))
         self.assertEqual(repository.stream_events[0]["event_type"], "tool_result")
         self.assertEqual(repository.outbox_events[0].event_type, EventType.TOOL_CALL_FAILED)
         self.assertEqual(repository.outbox_events[0].payload["error"]["code"], "TOOL_CALL_CANCELLED")
@@ -1894,6 +1897,7 @@ class SourceToolExecutorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.outbox_events, [])
         self.assertEqual(repository.finalized[0]["claim_owner"], repository.claim_owner)
         self.assertEqual(repository.finalized[0]["status"], "completed")
+        self.assertEqual(repository.finalized[0]["result"]["tool_call_id"], str(tool_call_id))
         self.assertEqual(repository.finalized[0]["event"].event_type, EventType.TOOL_CALL_COMPLETED)
         self.assertEqual(repository.finalized[0]["event"].payload["tool_call_id"], str(tool_call_id))
 
@@ -2269,6 +2273,9 @@ class PostgresToolCallRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("claim_owner = :claim_owner", update_sql)
         self.assertEqual(update_params["result_ref"], f"tool-results/{tool_call_id}.json")
         self.assertEqual(update_params["claim_owner"], "owner-1")
+        stream_insert = _first_executed_params(connection, "INSERT INTO agent_stream_events")
+        self.assertEqual(stream_insert["payload_json"]["tool_call_id"], str(tool_call_id))
+        self.assertEqual(stream_insert["payload_json"]["result_ref"], f"tool-results/{tool_call_id}.json")
 
     async def test_finalize_tool_call_appends_function_output_context_item_through_shared_store(self) -> None:
         turn_id = new_uuid7()
