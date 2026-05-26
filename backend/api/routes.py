@@ -19,8 +19,6 @@ from backend.api.schemas import (
     AnalysisCreateResponse,
     AnalysisListResponse,
     AnalysisResponse,
-    AnalysisSuggestionListResponse,
-    AnalysisSuggestionResponse,
     ErrorResponse,
     RepositorySearchListResponse,
     RepositorySearchResponse,
@@ -76,15 +74,6 @@ class AnalysisService(Protocol):
         created_before: datetime | None = None,
         limit: int = 50,
         cursor: str | None = None,
-        tenant_id: UUID | None = None,
-        created_by_user_id: UUID | None = None,
-    ) -> list[AnalysisRecord]: ...
-
-    def suggest(
-        self,
-        *,
-        repository_query: str,
-        limit: int = 6,
         tenant_id: UUID | None = None,
         created_by_user_id: UUID | None = None,
     ) -> list[AnalysisRecord]: ...
@@ -226,24 +215,6 @@ async def list_analysis(
     )
 
 
-@router.get("/analysis/suggestions", response_model=AnalysisSuggestionListResponse)
-async def suggest_analysis(
-    service: Annotated[AnalysisService, Depends(get_analysis_service)],
-    current_user: Annotated[CurrentUser, Depends(require_permission("analysis:read"))],
-    repository_query: Annotated[str, Query(min_length=1)],
-    limit: Annotated[int, Query(ge=1, le=10)] = 6,
-) -> AnalysisSuggestionListResponse:
-    records = await maybe_await(
-        service.suggest(
-            repository_query=repository_query,
-            limit=limit,
-            tenant_id=current_user.tenant_id,
-            created_by_user_id=current_user.id,
-        )
-    )
-    return AnalysisSuggestionListResponse(items=[_to_suggestion(record) for record in records])
-
-
 @router.get("/repositories/search", response_model=RepositorySearchListResponse)
 async def search_repositories(
     service: Annotated[AnalysisService, Depends(get_analysis_service)],
@@ -270,7 +241,7 @@ async def search_repositories(
 
 
 @router.get(
-    "/analysis/{analysis_id}",
+    "/analysis/{analysis_id:uuid}",
     response_model=AnalysisResponse,
     responses={404: {"model": ErrorResponse}},
 )
@@ -288,7 +259,7 @@ async def get_analysis(
 
 
 @router.post(
-    "/analysis/{analysis_id}/cancel",
+    "/analysis/{analysis_id:uuid}/cancel",
     response_model=AnalysisResponse,
     responses={404: {"model": ErrorResponse}},
 )
@@ -306,7 +277,7 @@ async def cancel_analysis(
 
 
 @router.get(
-    "/analysis/{analysis_id}/events",
+    "/analysis/{analysis_id:uuid}/events",
     responses={404: {"model": ErrorResponse}},
 )
 async def stream_analysis_events(
@@ -394,20 +365,6 @@ def _to_batch_create_response(record: AnalysisBatchRecord) -> AnalysisBatchCreat
             )
             for item in record.items
         ],
-    )
-
-
-def _to_suggestion(record: AnalysisRecord) -> AnalysisSuggestionResponse:
-    return AnalysisSuggestionResponse(
-        analysis_id=record.analysis_id,
-        agent_id=record.agent_id,
-        snapshot_id=record.snapshot_id,
-        status=record.status,
-        repository_label=_repository_label(record.repository_url),
-        repository_url=record.repository_url,
-        requested_ref=record.requested_ref,
-        resolved_commit_sha=record.resolved_commit_sha,
-        updated_at=record.updated_at,
     )
 
 

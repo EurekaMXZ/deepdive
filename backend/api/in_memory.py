@@ -14,7 +14,6 @@ from backend.api.records import (
     AnalysisRecord,
     RepositorySearchRecord,
 )
-from backend.api.repository_query import parse_repository_suggestion_query
 from backend.api.repository_search import (
     RepositoryIndexEntry,
     canonicalize_repository_url,
@@ -222,26 +221,6 @@ class InMemoryAnalysisService:
         offset = cursor_offset(cursor)
         return sorted_records[offset : offset + limit]
 
-    def suggest(
-        self,
-        *,
-        repository_query: str,
-        limit: int = 6,
-        tenant_id: UUID | None = None,
-        created_by_user_id: UUID | None = None,
-    ) -> list[AnalysisRecord]:
-        parsed_query = parse_repository_suggestion_query(repository_query)
-        if parsed_query is None:
-            return []
-        records = [
-            record
-            for record in self._records.values()
-            if _record_matches_repository_query(record, parsed_query.repository_url, parsed_query.repository_url_prefix)
-            and _record_matches_scope(record, tenant_id, created_by_user_id)
-        ]
-        records.sort(key=lambda record: (record.updated_at, record.created_at, record.analysis_id), reverse=True)
-        return records[:limit]
-
     def get(
         self,
         analysis_id: UUID,
@@ -315,11 +294,3 @@ def _record_matches_scope(
     return (tenant_id is None or record.tenant_id == tenant_id) and (
         created_by_user_id is None or record.created_by_user_id == created_by_user_id
     )
-
-
-def _record_matches_repository_query(
-    record: AnalysisRecord, repository_url: str | None, repository_url_prefix: str | None
-) -> bool:
-    if repository_url is not None:
-        return record.repository_url == repository_url
-    return repository_url_prefix is not None and record.repository_url.startswith(repository_url_prefix)

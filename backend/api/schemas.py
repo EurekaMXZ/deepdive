@@ -117,22 +117,6 @@ class AnalysisListResponse(BaseModel):
     next_cursor: str | None = None
 
 
-class AnalysisSuggestionResponse(BaseModel):
-    analysis_id: UUID
-    agent_id: UUID
-    snapshot_id: UUID | None
-    status: str
-    repository_label: str
-    repository_url: str
-    requested_ref: str
-    resolved_commit_sha: str | None
-    updated_at: datetime
-
-
-class AnalysisSuggestionListResponse(BaseModel):
-    items: list[AnalysisSuggestionResponse]
-
-
 class RepositorySearchResponse(BaseModel):
     repository_label: str
     repository_url: str

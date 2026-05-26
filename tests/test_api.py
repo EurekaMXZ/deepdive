@@ -183,65 +183,14 @@ class AnalysisApiTest(unittest.TestCase):
         self.assertEqual([item["analysis_id"] for item in page_two.json()["items"]], [first["analysis_id"]])
         self.assertIsNone(page_two.json()["next_cursor"])
 
-    def test_analysis_suggestions_return_recent_matching_repository_without_full_list(self) -> None:
-        matching = self.client.post(
-            "/api/analysis",
-            json={
-                "repository_url": "https://github.com/openai/codex.git",
-                "ref": "main",
-            },
-            headers=self.headers,
-        ).json()
-        self.client.post(
-            "/api/analysis",
-            json={
-                "repository_url": "https://github.com/example/other.git",
-                "ref": "main",
-            },
-            headers=self.headers,
-        )
-
+    def test_analysis_suggestions_endpoint_is_removed(self) -> None:
         response = self.client.get(
             "/api/analysis/suggestions",
             params={"repository_query": "openai/codex", "limit": 6},
             headers=self.headers,
         )
 
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(len(body["items"]), 1)
-        self.assertEqual(body["items"][0]["analysis_id"], matching["analysis_id"])
-        self.assertEqual(body["items"][0]["repository_label"], "openai/codex")
-        self.assertEqual(body["items"][0]["repository_url"], "https://github.com/openai/codex.git")
-
-    def test_analysis_suggestions_support_repository_prefix_queries(self) -> None:
-        matching = self.client.post(
-            "/api/analysis",
-            json={
-                "repository_url": "https://github.com/openai/codex.git",
-                "ref": "main",
-            },
-            headers=self.headers,
-        ).json()
-        self.client.post(
-            "/api/analysis",
-            json={
-                "repository_url": "https://github.com/vercel/next.js.git",
-                "ref": "main",
-            },
-            headers=self.headers,
-        )
-
-        response = self.client.get(
-            "/api/analysis/suggestions",
-            params={"repository_query": "openai/co", "limit": 6},
-            headers=self.headers,
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual([item["analysis_id"] for item in body["items"]], [matching["analysis_id"]])
-        self.assertEqual(body["items"][0]["repository_label"], "openai/codex")
+        self.assertEqual(response.status_code, 404)
 
     def test_repository_search_returns_deduplicated_non_prefix_matches(self) -> None:
         older = self.client.post(

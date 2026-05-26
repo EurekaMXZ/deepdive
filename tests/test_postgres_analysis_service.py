@@ -248,49 +248,6 @@ class PostgresAnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["repository_url_hash"], "sha256:repo")
         self.assertEqual(params["limit"], 10)
 
-    async def test_suggest_by_repository_query_uses_prefix_match_for_github_shorthand(self) -> None:
-        database = FakeDatabase()
-        service = PostgresAnalysisService(database, config=AppConfig.default(), config_version="config-fixture-v1")
-
-        await service.suggest(repository_query="openai/codex", limit=6)
-
-        statement, params = database.connection.executed[-1]
-        sql = str(statement)
-        self.assertIn("a.repository_url LIKE :repository_url_prefix", sql)
-        self.assertIn("ORDER BY a.updated_at DESC, a.created_at DESC, a.id DESC", sql)
-        self.assertIn("LIMIT :limit", sql)
-        self.assertEqual(params["repository_url_prefix"], "https://github.com/openai/codex%")
-        self.assertEqual(params["limit"], 6)
-
-    async def test_suggest_by_repository_query_uses_hash_for_full_git_url(self) -> None:
-        database = FakeDatabase()
-        service = PostgresAnalysisService(database, config=AppConfig.default(), config_version="config-fixture-v1")
-
-        await service.suggest(repository_query="https://github.com/openai/codex.git", limit=6)
-
-        statement, params = database.connection.executed[-1]
-        sql = str(statement)
-        self.assertIn("a.repository_url_hash = :repository_url_hash", sql)
-        self.assertIn("LIMIT :limit", sql)
-        self.assertEqual(
-            params["repository_url_hash"], "sha256:105fd62fe5d54a91904a74b56a979a5e9a9245a42108ebb5440bf9adfc688744"
-        )
-
-    async def test_suggest_by_repository_query_uses_prefix_match_for_partial_input(self) -> None:
-        database = FakeDatabase()
-        service = PostgresAnalysisService(database, config=AppConfig.default(), config_version="config-fixture-v1")
-
-        await service.suggest(repository_query="openai/co", limit=6)
-
-        statement, params = database.connection.executed[-1]
-        sql = str(statement)
-        self.assertIn("a.repository_url LIKE :repository_url_prefix", sql)
-        self.assertIn("ORDER BY a.updated_at DESC, a.created_at DESC, a.id DESC", sql)
-        self.assertIn("LIMIT :limit", sql)
-        self.assertEqual(params["repository_url_prefix"], "https://github.com/openai/co%")
-        self.assertEqual(params["limit"], 6)
-
-
 class FakeDatabase:
     def __init__(self, *, rows: list[dict] | None = None, cancel_update_rows: list[dict] | None = None) -> None:
         self.connection = FakeConnection(rows=rows, cancel_update_rows=cancel_update_rows)

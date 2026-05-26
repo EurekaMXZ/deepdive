@@ -19,7 +19,6 @@ from backend.api.records import (
     AnalysisRecord,
     RepositorySearchRecord,
 )
-from backend.api.repository_query import parse_repository_suggestion_query
 from backend.api.repository_search import (
     CanonicalRepository,
     canonicalize_repository_url,
@@ -474,66 +473,6 @@ class PostgresAnalysisService:
                     LEFT JOIN snapshots snap ON snap.id = s.snapshot_id
                     {where}
                     ORDER BY a.created_at DESC, a.id DESC
-                    LIMIT :limit
-                    """
-                ),
-                params,
-            )
-            return [_record_from_row(row) for row in result.mappings().all()]
-
-    async def suggest(
-        self,
-        *,
-        repository_query: str,
-        limit: int = 6,
-        tenant_id: UUID | None = None,
-        created_by_user_id: UUID | None = None,
-    ) -> list[AnalysisRecord]:
-        parsed_query = parse_repository_suggestion_query(repository_query)
-        if parsed_query is None:
-            return []
-        params: dict[str, str | UUID | int | None] = {
-            "repository_url_hash": _sha256_text(parsed_query.repository_url) if parsed_query.repository_url else None,
-            "repository_url_prefix": f"{parsed_query.repository_url_prefix}%"
-            if parsed_query.repository_url_prefix
-            else None,
-            "limit": limit,
-            "tenant_id": tenant_id,
-            "created_by_user_id": created_by_user_id,
-        }
-        clauses = (
-            ["a.repository_url_hash = :repository_url_hash"]
-            if parsed_query.repository_url
-            else ["a.repository_url LIKE :repository_url_prefix"]
-        )
-        if tenant_id is not None:
-            clauses.append("a.tenant_id = :tenant_id")
-        if created_by_user_id is not None:
-            clauses.append("a.created_by_user_id = :created_by_user_id")
-        where = "WHERE " + " AND ".join(clauses)
-        async with self._database.begin() as connection:
-            result = await connection.execute(
-                text(
-                    f"""
-                    SELECT
-                        a.id AS analysis_id,
-                        s.id AS agent_id,
-                        s.snapshot_id AS snapshot_id,
-                        a.status AS status,
-                        a.tenant_id AS tenant_id,
-                        a.created_by_user_id AS created_by_user_id,
-                        a.repository_url AS repository_url,
-                        a.requested_ref AS requested_ref,
-                        snap.resolved_commit_sha AS resolved_commit_sha,
-                        a.error_code AS error_code,
-                        a.error_message AS error_message,
-                        a.created_at AS created_at,
-                        a.updated_at AS updated_at
-                    FROM analyses a
-                    JOIN agent_sessions s ON s.analysis_id = a.id
-                    LEFT JOIN snapshots snap ON snap.id = s.snapshot_id
-                    {where}
-                    ORDER BY a.updated_at DESC, a.created_at DESC, a.id DESC
                     LIMIT :limit
                     """
                 ),

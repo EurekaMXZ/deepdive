@@ -96,7 +96,7 @@ def get_document_service(request: Request) -> DocumentQueryService:
     return request.app.state.document_service
 
 
-@router.get("/analysis/{analysis_id}/documents", response_model=DocumentListResponse)
+@router.get("/analysis/{analysis_id:uuid}/documents", response_model=DocumentListResponse)
 async def list_analysis_documents(
     analysis_id: UUID,
     analysis_service: Annotated[AnalysisService, Depends(get_analysis_service)],
@@ -113,7 +113,7 @@ async def list_analysis_documents(
     return DocumentListResponse(items=[DocumentResponse(**document) for document in page], next_cursor=next_cursor)
 
 
-@router.get("/analysis/{analysis_id}/documents/tree", response_model=DocumentTreeResponse)
+@router.get("/analysis/{analysis_id:uuid}/documents/tree", response_model=DocumentTreeResponse)
 async def get_analysis_documents_tree(
     analysis_id: UUID,
     analysis_service: Annotated[AnalysisService, Depends(get_analysis_service)],
@@ -125,7 +125,7 @@ async def get_analysis_documents_tree(
     return DocumentTreeResponse(items=[DocumentTreeNodeResponse(**item) for item in items])
 
 
-@router.get("/analysis/{analysis_id}/documents/{document_id}", response_model=DocumentResponse)
+@router.get("/analysis/{analysis_id:uuid}/documents/{document_id:uuid}", response_model=DocumentResponse)
 async def get_analysis_document(
     analysis_id: UUID,
     document_id: UUID,
@@ -140,7 +140,7 @@ async def get_analysis_document(
     return DocumentResponse(**document)
 
 
-@router.get("/analysis/{analysis_id}/documents/{document_id}/content", response_model=DocumentContentResponse)
+@router.get("/analysis/{analysis_id:uuid}/documents/{document_id:uuid}/content", response_model=DocumentContentResponse)
 async def get_analysis_document_content(
     analysis_id: UUID,
     document_id: UUID,
@@ -155,7 +155,7 @@ async def get_analysis_document_content(
     return DocumentContentResponse(**document)
 
 
-@router.get("/analysis/{analysis_id}/documents/{document_id}/revisions", response_model=DocumentRevisionListResponse)
+@router.get("/analysis/{analysis_id:uuid}/documents/{document_id:uuid}/revisions", response_model=DocumentRevisionListResponse)
 async def list_analysis_document_revisions(
     analysis_id: UUID,
     document_id: UUID,
