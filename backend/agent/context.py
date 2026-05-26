@@ -17,13 +17,13 @@ DEFAULT_SYSTEM_INSTRUCTION = (
     "Use the provided source snapshot tools, web search tools, and document artifact tools only for their intended analysis workflow."
 )
 DEFAULT_DEVELOPER_INSTRUCTION = (
-    "Analyze the repository by inspecting the file tree and reading/searching files; when local repository evidence is insufficient, use web search tools to supplement it. "
+    "Analyze the repository by inspecting the file tree and reading/searching files first. When repository evidence shows external dependencies, frameworks, SDKs, APIs, protocols, runtimes, databases, middleware, deployment platforms, authentication mechanisms, cryptographic algorithms, or third-party services, use web_search to check relevant public material, preferring official documentation or authoritative sources. Do not start with generic web searches before the repository gives concrete external objects to investigate; treat web results as potentially stale background and never as a substitute for repository evidence. "
     "Repository analysis and document output must be meticulous and comprehensive: cover every material component, API surface, data flow, configuration path, dependency, operational concern, risk, and follow-up point that is supported by evidence; do not omit important findings or collapse distinct concerns into vague summaries. "
     "Write final analysis material only as platform document artifact tools, not as repository files. "
-    "Create multiple focused documents arranged in a document tree: use folder nodes for broad areas such as backend, frontend, deployment, or operations; "
-    "for non-trivial repositories, create nested folder levels using a domain folder -> subsystem folder -> focused document structure instead of a flat parallel list. "
-    "Each document must live under the most specific relevant folder, focus on one bounded subsystem or concern, and contain multiple structured sections instead of one omnibus report. "
-    "For example, create backend/agent-runtime/context-and-compaction and backend/api/authentication-and-authorization rather than placing every backend document directly under backend. "
+    "Create the profile's required folder/document tree as separate nodes first, then add optional sibling documents only when evidence supports them. Do not merge required leaves: authentication and authorization are separate topics; snapshot, agent, and execution workers are separate topics; home page, login page, markdown rendering, Docker, and Kubernetes are separate topics. "
+    "Each document must live under the most specific relevant folder, focus on one bounded subsystem or concern, and contain multiple reader-oriented sections instead of one omnibus report. Start with plain-language explanations of what the part is, why it exists, the mental model, and how a new reader should follow the flow; then provide evidence, source excerpts, diagrams, formulas, risks, and verification steps. "
+    "When using web material about external dependencies or platforms, introduce it with a Markdown blockquote headed by '引用' or a Markdown definition list, then immediately connect it to concrete repository files, dependency versions, configuration keys, or tests. "
+    "Before completing, read or otherwise verify created drafts and call document_finalize for every document that meets the profile requirements; do not leave completed work as drafts. "
     "Cite concrete file paths, line evidence, and web citations from tool results."
 )
 
@@ -333,13 +333,13 @@ def _web_search_tool_choice(
     response_tools: list[dict[str, Any]],
 ) -> str | dict[str, str] | None:
     choice = config.web_search_tool_choice
-    if choice == "auto":
-        return None
-
     has_tavily_function = any(
         tool.get("type") == "function" and tool.get("name") == "web_search" for tool in response_tools
     )
     has_hosted_web_search = any(tool.get("type") == "web_search" for tool in response_tools)
+    if choice == "auto":
+        return None
+
     if choice == "required":
         return "required" if has_tavily_function or has_hosted_web_search else None
     if choice == "required_tavily":

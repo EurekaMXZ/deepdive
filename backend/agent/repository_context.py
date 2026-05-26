@@ -19,6 +19,7 @@ class AgentContextStore:
         return connection_from(self._connection_or_database)
 
     async def load_context_items(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
+        repository_metadata = await self.load_repository_metadata(session=session)
         tree = await self._load_tree(session.snapshot_id) if session.snapshot_id else []
         memory = await self.load_latest_memory_summary(agent_id=session.agent_id)
         todo = await self.load_latest_todo_list(agent_id=session.agent_id)
@@ -29,14 +30,34 @@ class AgentContextStore:
                     {
                         "type": "input_text",
                         "text": (
-                            "请分析这个仓库的源码结构。先使用 list_files/search_file/search_text/read_file "
-                            "获取证据；如果文档工具可用, 将最终材料沉淀为多级 Markdown document artifacts, "
-                            "并按 profile 要求补充必要源码片段、LaTeX 说明和 Mermaid 图。"
+                            "请分析这个仓库的源码结构。先使用 list_files/search_file/search_text/read_file 获取源码证据；"
+                            "当源码、依赖文件、配置、lockfile、Docker/CI 或测试中出现外部依赖、框架、SDK、API、协议、"
+                            "运行时、数据库、中间件、部署平台、认证机制、加密算法或第三方服务时, 使用 web_search 查阅"
+                            "相关资料, 优先核对官方文档或权威来源。不要在没有仓库线索时开局泛搜；搜索结果可能过时, "
+                            "只能作为背景信息, 不能替代源码、依赖文件、配置和测试证据。若文档工具可用, 必须将最终材料沉淀为多级 Markdown document artifacts, "
+                            "严格按 profile 的必需文档树创建独立节点, 不要合并 Authentication/Authorization、各 worker、"
+                            "各前端页面或 Docker/Kubernetes 等必需主题。每篇非平凡文档都要先用浅显语言解释它是什么、"
+                            "为什么存在、读者应该如何理解, 再给源码证据、必要源码片段、LaTeX 说明和 Mermaid 图。"
+                            "文档使用外部资料时, 必须用 Markdown 引用块并以“引用”引出, 或用定义列表引出相关概念, "
+                            "随后立刻说明它对应本仓库的哪些文件、依赖版本、配置项或测试。"
+                            "完成后用 document_finalize 标记已完成文档。"
                         ),
                     }
                 ],
             }
         ]
+        if repository_metadata:
+            items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": _repository_metadata_context_text(repository_metadata),
+                        }
+                    ],
+                }
+            )
         if tree:
             items.append(
                 {
@@ -74,6 +95,29 @@ class AgentContextStore:
                 }
             )
         return items
+
+    async def load_repository_metadata(self, *, session: AgentSessionState) -> dict[str, Any] | None:
+        async with self._connection() as connection:
+            result = await connection.execute(
+                text(
+                    """
+                    SELECT
+                        a.repository_url,
+                        a.requested_ref,
+                        snap.resolved_commit_sha,
+                        snap.tree_sha,
+                        snap.file_count,
+                        snap.total_bytes
+                    FROM analyses a
+                    LEFT JOIN snapshots snap ON snap.id = :snapshot_id
+                    WHERE a.id = :analysis_id
+                    LIMIT 1
+                    """
+                ),
+                {"analysis_id": session.analysis_id, "snapshot_id": session.snapshot_id},
+            )
+        row = result.mappings().first()
+        return dict(row) if row is not None else None
 
     async def load_instruction_files(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
         if session.snapshot_id is None:
@@ -185,4 +229,13 @@ def _todo_context_text(todo: dict[str, Any]) -> str:
             lines.append(f"- [{item.get('status')}] {item.get('id')} - {item.get('title')}")
     if todo.get("note"):
         lines.append(f"note: {todo['note']}")
+    return "\n".join(lines)
+
+
+def _repository_metadata_context_text(metadata: dict[str, Any]) -> str:
+    lines = ["当前分析仓库元数据:"]
+    for key in ("repository_url", "requested_ref", "resolved_commit_sha", "tree_sha", "file_count", "total_bytes"):
+        value = metadata.get(key)
+        if value is not None:
+            lines.append(f"{key}: {value}")
     return "\n".join(lines)

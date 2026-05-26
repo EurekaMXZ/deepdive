@@ -360,6 +360,10 @@ class AgentCommandHandler:
             return
         session = refreshed_session
         output_ref = self._store_model_output(session=session, turn_id=turn_id, response=response)
+        agent_message_payloads = _agent_message_payloads_from_output_items(
+            response.output_items or [],
+            response_id=response.response_id,
+        )
 
         if response.tool_calls:
             max_tool_calls = int(session.effective_limits_json.get("max_tool_calls") or 0)
@@ -386,6 +390,7 @@ class AgentCommandHandler:
                     "output_ref": output_ref,
                     "usage": response.usage,
                     "output_items": response.output_items,
+                    "agent_message_payloads": agent_message_payloads,
                 }
                 if atomic_tool_calls is not None
                 else None,
@@ -429,6 +434,7 @@ class AgentCommandHandler:
                 output_text=response.output_text,
                 stream_payload={"status": "completed", "response_id": response.response_id, "output_ref": output_ref},
                 output_items=response.output_items,
+                agent_message_payloads=agent_message_payloads,
                 event=completed_event,
                 final_delta_payload={"text": response.output_text} if response.output_text else None,
             )
@@ -453,6 +459,16 @@ class AgentCommandHandler:
         )
         if not completed:
             return
+        for payload in agent_message_payloads:
+            await self._repository.add_stream_event(
+                analysis_id=session.analysis_id,
+                agent_id=session.agent_id,
+                event_type="agent_message",
+                payload=payload,
+                turn_id=turn_id,
+                response_id=response.response_id,
+                state="completed",
+            )
         if response.output_text:
             await self._repository.add_stream_event(
                 analysis_id=session.analysis_id,
@@ -1036,6 +1052,7 @@ class AgentCommandHandler:
                     output_ref=completed_turn["output_ref"],
                     usage=completed_turn["usage"],
                     output_items=completed_turn.get("output_items"),
+                    agent_message_payloads=completed_turn.get("agent_message_payloads"),
                     latest_response_agent_id=session.agent_id,
                     tool_call_kwargs=tool_call_kwargs,
                     analysis_id=session.analysis_id,
@@ -1108,6 +1125,7 @@ class AgentCommandHandler:
                 output_ref=completed_turn["output_ref"],
                 usage=completed_turn["usage"],
                 output_items=completed_turn.get("output_items"),
+                agent_message_payloads=completed_turn.get("agent_message_payloads"),
                 latest_response_agent_id=session.agent_id,
                 tool_call_kwargs=tool_call_kwargs,
                 analysis_id=session.analysis_id,
@@ -1185,6 +1203,7 @@ class AgentCommandHandler:
             output_ref=completed_turn["output_ref"],
             usage=completed_turn["usage"],
             output_items=completed_turn.get("output_items"),
+            agent_message_payloads=completed_turn.get("agent_message_payloads"),
             latest_response_agent_id=session.agent_id,
             tool_call_requests=tool_call_requests,
             analysis_id=session.analysis_id,
@@ -1526,6 +1545,51 @@ def _local_model_replacement_input(response: ModelResponse) -> list[dict[str, An
             ],
         }
     ]
+
+
+def _agent_message_payloads_from_output_items(
+    output_items: list[dict[str, Any]],
+    *,
+    response_id: str,
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for item in output_items:
+        if item.get("type") != "message" or item.get("role") != "assistant":
+            continue
+        content_parts = _agent_message_text_parts(item.get("content"))
+        if not content_parts:
+            continue
+        text = "".join(content_parts)
+        payload: dict[str, Any] = {
+            "type": "agent_message",
+            "response_id": response_id,
+            "text": text,
+            "content": [{"type": "text", "text": part} for part in content_parts],
+        }
+        if item.get("id") is not None:
+            payload["item_id"] = str(item["id"])
+        if item.get("phase") is not None:
+            payload["phase"] = str(item["phase"])
+        payloads.append(payload)
+    return payloads
+
+
+def _agent_message_text_parts(content: Any) -> list[str]:
+    if isinstance(content, str):
+        return [content] if content else []
+    if not isinstance(content, list):
+        return []
+    parts: list[str] = []
+    for content_item in content:
+        if not isinstance(content_item, dict):
+            continue
+        item_type = content_item.get("type")
+        if item_type not in {None, "output_text", "text"}:
+            continue
+        text = content_item.get("text")
+        if isinstance(text, str) and text:
+            parts.append(text)
+    return parts
 
 
 def _remote_v2_replacement_input(

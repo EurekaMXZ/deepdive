@@ -15,6 +15,8 @@ RUN pip install --no-cache-dir uv \
 
 COPY backend ./backend
 COPY docs ./docs
+COPY prompts ./prompts
+COPY profiles ./profiles
 
 ENV PATH="/app/.venv/bin:${PATH}"
 

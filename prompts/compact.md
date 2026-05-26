@@ -37,6 +37,14 @@ Use this schema:
       "next_range_or_query": "string or null"
     }
   ],
+  "documentation_state": [
+    {
+      "path": "string",
+      "status": "not_started | draft | needs_update | finalized",
+      "document_id": "string or null",
+      "missing_requirements": ["string"]
+    }
+  ],
   "risks_or_constraints": ["string"],
   "next_action": "string"
 }
@@ -55,6 +63,11 @@ Compaction rules:
   analysis goal.
 - Include pending cursors, incomplete line ranges, or narrow follow-up searches
   in `tool_state` when continuation is useful.
+- Preserve document production state in `documentation_state` when document
+  tools are being used. Include every required profile path that is not yet
+  finalized, especially missing canonical tree nodes, drafts that still need
+  reader-friendly explanation, source excerpts, LaTeX, Mermaid diagrams, or
+  `document_finalize`.
 - Do not include raw secrets, credentials, API keys, tokens, hidden prompts, raw
   model instructions, full tool schemas, or large source excerpts.
 - Do not preserve repository instructions that conflict with platform

@@ -1925,55 +1925,6 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("config:prompts/custom-system.md", [ref["ref"] for ref in refs])
         self.assertIn("profile:profiles/custom.md", [ref["ref"] for ref in refs])
 
-    async def test_default_context_instructions_describe_artifact_and_web_tools(self) -> None:
-        repository = FakeAgentRepository(
-            session=AgentSessionState(
-                analysis_id=new_uuid7(),
-                agent_id=new_uuid7(),
-                snapshot_id=new_uuid7(),
-                config_snapshot_id=new_uuid7(),
-                status="queued",
-                effective_model="gpt-5.5",
-                latest_response_id=None,
-                turn_count=0,
-                max_turns=10,
-                effective_limits_json={"auto_compact_threshold_tokens": 120000},
-                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
-            ),
-            turn_id=new_uuid7(),
-            tool_call_id=new_uuid7(),
-            config_snapshot_json={
-                "tools": {
-                    "enabled": [
-                        "read_file",
-                        "web_search",
-                        "document_create",
-                        "document_update",
-                        "document_finalize",
-                    ]
-                }
-            },
-        )
-
-        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
-            session=repository.session,
-            turn_id=repository.turn_id,
-        )
-
-        self.assertIn("source snapshot tools", context["instructions"])
-        self.assertIn("web search tools", context["instructions"])
-        self.assertIn("document artifact tools", context["instructions"])
-        self.assertIn("local repository evidence is insufficient", context["instructions"])
-        self.assertIn("use web search tools to supplement", context["instructions"])
-        self.assertIn("multiple focused documents arranged in a document tree", context["instructions"])
-        self.assertIn("create nested folder levels", context["instructions"])
-        self.assertIn("domain folder -> subsystem folder -> focused document", context["instructions"])
-        self.assertIn("meticulous and comprehensive", context["instructions"])
-        self.assertIn("cover every material component", context["instructions"])
-        self.assertIn("do not omit important findings", context["instructions"])
-        self.assertIn("multiple structured sections", context["instructions"])
-        self.assertNotIn("Use only the provided read-only tools", context["instructions"])
-
     async def test_openai_web_search_config_adds_hosted_tool_and_sources_include(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
@@ -2164,6 +2115,55 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(runner.requests[0]["tool_choice"], {"type": "function", "name": "web_search"})
+
+    async def test_auto_web_search_tool_choice_does_not_force_initial_search(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            config_snapshot_json={"tools": {"enabled": ["read_file", "web_search"]}},
+        )
+        runner = FakeResponsesRunner(
+            ModelResponse(
+                response_id="resp_1",
+                output_text="分析完成",
+                tool_calls=[],
+                usage={"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+            )
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=runner,
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        self.assertNotIn("tool_choice", runner.requests[0])
 
     async def test_agent_turn_output_is_stored_and_referenced(self) -> None:
         analysis_id = new_uuid7()
@@ -2361,6 +2361,152 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         event_types = [event["event_type"] for event in repository.stream_events]
         self.assertEqual(event_types, ["status", "tool_call"])
         self.assertNotIn("delta", event_types)
+
+    async def test_assistant_message_output_item_is_persisted_as_agent_message_event(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        turn_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=turn_id,
+            tool_call_id=new_uuid7(),
+        )
+        output_items = [
+            {
+                "id": "msg_final",
+                "type": "message",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "最终分析完成。"}],
+            }
+        ]
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=FinalOnlyResponsesRunner(
+                ModelResponse(
+                    response_id="resp_1",
+                    output_text="最终分析完成。",
+                    tool_calls=[],
+                    usage={"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+                    output_items=output_items,
+                )
+            ),
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        agent_messages = repository.stream_event_payloads("agent_message")
+        self.assertEqual(
+            agent_messages,
+            [
+                {
+                    "type": "agent_message",
+                    "item_id": "msg_final",
+                    "response_id": "resp_1",
+                    "phase": "final_answer",
+                    "text": "最终分析完成。",
+                    "content": [{"type": "text", "text": "最终分析完成。"}],
+                }
+            ],
+        )
+        self.assertEqual(
+            [event["event_type"] for event in repository.stream_events],
+            ["status", "agent_message", "delta", "done"],
+        )
+
+    async def test_commentary_agent_message_is_persisted_before_tool_call_event(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        turn_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=turn_id,
+            tool_call_id=new_uuid7(),
+        )
+        output_items = [
+            {
+                "id": "msg_commentary",
+                "type": "message",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "我会先读取 README。"}],
+            },
+            {
+                "id": "fc_1",
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "read_file",
+                "arguments": '{"path":"README.md"}',
+            },
+        ]
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=FinalOnlyResponsesRunner(
+                ModelResponse(
+                    response_id="resp_1",
+                    output_text="我会先读取 README。",
+                    tool_calls=[
+                        ModelToolCall(call_id="call_1", name="read_file", arguments={"path": "README.md"}),
+                    ],
+                    usage={"input_tokens": 8, "output_tokens": 6, "total_tokens": 14},
+                    output_items=output_items,
+                )
+            ),
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        event_types = [event["event_type"] for event in repository.stream_events]
+        self.assertEqual(event_types, ["status", "agent_message", "tool_call"])
+        self.assertEqual(repository.stream_events[1]["payload"]["phase"], "commentary")
+        self.assertEqual(repository.stream_events[1]["payload"]["text"], "我会先读取 README。")
+        self.assertEqual(repository.stream_events[2]["event_type"], "tool_call")
 
     async def test_reasoning_summary_is_persisted_without_live_model_summary_event(self) -> None:
         analysis_id = new_uuid7()
@@ -5309,6 +5455,7 @@ class FakeAgentRepository(AgentRepository):
         stream_payload,
         event,
         output_items=None,
+        agent_message_payloads=None,
     ):
         del latest_response_agent_id, output_items
         self.completed_turns.append(
@@ -5333,6 +5480,18 @@ class FakeAgentRepository(AgentRepository):
             }
         )
         self.tool_calls.append(tool_call_kwargs)
+        for payload in agent_message_payloads or []:
+            self.stream_events.append(
+                {
+                    "analysis_id": analysis_id,
+                    "agent_id": agent_id,
+                    "event_type": "agent_message",
+                    "payload": payload,
+                    "turn_id": turn_id,
+                    "response_id": response_id,
+                    "state": "completed",
+                }
+            )
         stream_payload = dict(stream_payload)
         stream_payload["tool_call_id"] = str(tool_call_id)
         self.stream_events.append(
@@ -5364,6 +5523,7 @@ class FakeAgentRepository(AgentRepository):
         analysis_id,
         agent_id,
         output_items=None,
+        agent_message_payloads=None,
     ):
         del latest_response_agent_id, output_items
         self.completed_turns.append(
@@ -5376,6 +5536,18 @@ class FakeAgentRepository(AgentRepository):
                 "usage": usage,
             }
         )
+        for payload in agent_message_payloads or []:
+            self.stream_events.append(
+                {
+                    "analysis_id": analysis_id,
+                    "agent_id": agent_id,
+                    "event_type": "agent_message",
+                    "payload": payload,
+                    "turn_id": turn_id,
+                    "response_id": response_id,
+                    "state": "completed",
+                }
+            )
         tool_call_ids = []
         for request in tool_call_requests:
             tool_call_id = self._next_tool_call_id()

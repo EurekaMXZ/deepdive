@@ -51,6 +51,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         snapshot_id = new_uuid7()
         connection = FakeConnection(
             row_batches=[
+                [],
                 [
                     {"path": ".env"},
                     {"path": ".env.example"},
@@ -75,15 +76,47 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(".env", tree_paths)
         self.assertNotIn(".docker/config.json", tree_text)
         self.assertNotIn("private.pem", tree_text)
-        tree_sql = str(connection.executed[0][0])
+        tree_sql = str(_first_executed_statement(connection, "FROM snapshot_files"))
         self.assertIn("path <> '.env'", tree_sql)
         self.assertIn("'.env.example'", tree_sql)
         self.assertIn("lower(path) NOT LIKE '%.pem'", tree_sql)
+
+    async def test_load_context_items_includes_repository_metadata_for_search_calibration(self) -> None:
+        snapshot_id = new_uuid7()
+        connection = FakeConnection(
+            row_batches=[
+                [
+                    {
+                        "repository_url": "https://github.com/example/deepdive.git",
+                        "requested_ref": "main",
+                        "resolved_commit_sha": "abc123",
+                        "tree_sha": "tree456",
+                        "file_count": 42,
+                        "total_bytes": 2048,
+                    }
+                ],
+                [{"path": "README.md"}],
+                [],
+            ]
+        )
+        repository = PostgresAgentRepository(connection)
+
+        items = await repository.load_context_items(session=_session(snapshot_id=snapshot_id))
+
+        metadata_item = next(item for item in items if "当前分析仓库元数据" in item["content"][0]["text"])
+        metadata_text = metadata_item["content"][0]["text"]
+        self.assertIn("repository_url: https://github.com/example/deepdive.git", metadata_text)
+        self.assertIn("requested_ref: main", metadata_text)
+        self.assertIn("resolved_commit_sha: abc123", metadata_text)
+        executed_sql = "\n".join(str(statement) for statement, _ in connection.executed)
+        self.assertIn("FROM analyses a", executed_sql)
+        self.assertIn("LEFT JOIN snapshots", executed_sql)
 
     async def test_load_context_items_includes_latest_todo_snapshot(self) -> None:
         snapshot_id = new_uuid7()
         connection = FakeConnection(
             row_batches=[
+                [],
                 [{"path": "README.md"}],
                 [],
                 [
@@ -554,8 +587,25 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
             analysis_id=analysis_id,
             agent_id=agent_id,
             output_items=[
+                {
+                    "id": "msg_commentary",
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "I will read README first."}],
+                },
                 {"id": "fc_search", "type": "function_call", "call_id": "call_search", "name": "search_file"},
                 {"id": "fc_read", "type": "function_call", "call_id": "call_read", "name": "read_file"},
+            ],
+            agent_message_payloads=[
+                {
+                    "type": "agent_message",
+                    "item_id": "msg_commentary",
+                    "response_id": "resp_1",
+                    "phase": "commentary",
+                    "text": "I will read README first.",
+                    "content": [{"type": "text", "text": "I will read README first."}],
+                }
             ],
         )
 
@@ -564,11 +614,15 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("UPDATE agent_sessions", executed_sql)
         self.assertIn("UPDATE agent_turns", executed_sql)
         self.assertEqual(len(_executed_params(connection, "INSERT INTO tool_calls")), 2)
-        self.assertEqual(len(_executed_params(connection, "INSERT INTO agent_context_items")), 2)
+        self.assertEqual(len(_executed_params(connection, "INSERT INTO agent_context_items")), 3)
         stream_inserts = _executed_params(connection, "INSERT INTO agent_stream_events")
         outbox_inserts = _executed_params(connection, "INSERT INTO outbox_events")
+        self.assertEqual([params["event_type"] for params in stream_inserts], ["agent_message", "tool_call", "tool_call"])
+        self.assertEqual(stream_inserts[0]["payload_json"]["text"], "I will read README first.")
+        self.assertEqual(stream_inserts[0]["idempotency_key"], "agent_message:resp_1:msg_commentary")
+        tool_stream_inserts = [params for params in stream_inserts if params["event_type"] == "tool_call"]
         self.assertEqual(
-            [params["payload_json"]["tool_call_id"] for params in stream_inserts],
+            [params["payload_json"]["tool_call_id"] for params in tool_stream_inserts],
             [str(first_tool_call_id), str(second_tool_call_id)],
         )
         self.assertEqual(
@@ -656,6 +710,16 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
                     "phase": "final",
                 },
             ],
+            agent_message_payloads=[
+                {
+                    "type": "agent_message",
+                    "item_id": "msg_1",
+                    "response_id": "resp_1",
+                    "phase": "final",
+                    "text": "done",
+                    "content": [{"type": "text", "text": "done"}],
+                }
+            ],
             event=EventEnvelope.new(
                 event_type=EventType.ANALYSIS_COMPLETED,
                 analysis_id=analysis_id,
@@ -674,7 +738,7 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INSERT INTO agent_context_items", executed_sql)
         self.assertIn("INSERT INTO agent_stream_events", executed_sql)
         self.assertIn("INSERT INTO outbox_events", executed_sql)
-        stream_insert = _first_executed_params(connection, "INSERT INTO agent_stream_events")
+        stream_inserts = _executed_params(connection, "INSERT INTO agent_stream_events")
         context_inserts = _executed_params(connection, "INSERT INTO agent_context_items")
         outbox_insert = _first_executed_params(connection, "INSERT INTO outbox_events")
         self.assertEqual([params["item_type"] for params in context_inserts], ["reasoning", "message"])
@@ -682,7 +746,9 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context_inserts[1]["payload_json"]["id"], "msg_1")
         self.assertEqual(context_inserts[1]["payload_json"]["content"], [{"type": "output_text", "text": "done"}])
         self.assertEqual(context_inserts[1]["idempotency_key"], "model:message:msg_1")
-        self.assertEqual(stream_insert["event_type"], "done")
+        self.assertEqual([params["event_type"] for params in stream_inserts], ["agent_message", "done"])
+        self.assertEqual(stream_inserts[0]["payload_json"]["text"], "done")
+        self.assertEqual(stream_inserts[0]["idempotency_key"], "agent_message:resp_1:msg_1")
         self.assertEqual(outbox_insert["payload_json"]["event_type"], "AnalysisCompleted")
 
     async def test_complete_turn_with_final_answer_writes_final_delta_before_done(self) -> None:

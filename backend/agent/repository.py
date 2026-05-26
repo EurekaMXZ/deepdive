@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
@@ -191,6 +192,9 @@ class PostgresAgentRepository:
 
     async def load_context_items(self, *, session: AgentSessionState) -> list[dict[str, Any]]:
         return await self._context_store.load_context_items(session=session)
+
+    async def load_repository_metadata(self, *, session: AgentSessionState) -> dict[str, Any] | None:
+        return await self._context_store.load_repository_metadata(session=session)
 
     async def load_uncompacted_context_items(self, *, agent_id: UUID, limit: int = 12) -> list[dict[str, Any]]:
         async with self._connection() as connection:
@@ -515,6 +519,7 @@ class PostgresAgentRepository:
         stream_event_type: str,
         stream_payload: dict[str, Any],
         output_items: list[dict[str, Any]] | None = None,
+        agent_message_payloads: list[dict[str, Any]] | None = None,
         event: EventEnvelope,
     ) -> UUID:
         async with self._connection() as connection:
@@ -575,6 +580,14 @@ class PostgresAgentRepository:
                     source=TOOL_CONTEXT_SOURCE,
                     idempotency_key=tool_output_idempotency_key(context_tool_call_kwargs["openai_call_id"]),
                 )
+            await self._add_agent_message_stream_events_on_connection(
+                connection,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                response_id=response_id,
+                agent_message_payloads=agent_message_payloads,
+            )
             payload = dict(stream_payload)
             payload["tool_call_id"] = str(tool_call_id)
             await self._add_stream_event_on_connection(
@@ -609,6 +622,7 @@ class PostgresAgentRepository:
         analysis_id: UUID,
         agent_id: UUID,
         output_items: list[dict[str, Any]] | None = None,
+        agent_message_payloads: list[dict[str, Any]] | None = None,
     ) -> list[UUID]:
         async with self._connection() as connection:
             can_create = await self._lock_continuable_session(connection, analysis_id=analysis_id, agent_id=agent_id)
@@ -656,6 +670,14 @@ class PostgresAgentRepository:
                         source=MODEL_CONTEXT_SOURCE,
                         idempotency_key=model_function_call_idempotency_key(tool_call_kwargs["openai_call_id"]),
                     )
+            await self._add_agent_message_stream_events_on_connection(
+                connection,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                response_id=response_id,
+                agent_message_payloads=agent_message_payloads,
+            )
             for index, request in enumerate(tool_call_requests):
                 tool_call_id = tool_call_ids[index]
                 tool_call_kwargs = dict(request["tool_call_kwargs"])
@@ -710,6 +732,7 @@ class PostgresAgentRepository:
         stream_payload: dict[str, Any],
         event: EventEnvelope,
         output_items: list[dict[str, Any]] | None = None,
+        agent_message_payloads: list[dict[str, Any]] | None = None,
         final_delta_payload: dict[str, Any] | None = None,
         final_output_payload: dict[str, Any] | None = None,
     ) -> bool:
@@ -774,6 +797,14 @@ class PostgresAgentRepository:
                     source=MODEL_CONTEXT_SOURCE,
                     idempotency_key=assistant_output_idempotency_key(response_id),
                 )
+            await self._add_agent_message_stream_events_on_connection(
+                connection,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                turn_id=turn_id,
+                response_id=response_id,
+                agent_message_payloads=agent_message_payloads,
+            )
             if final_delta_payload is not None:
                 await self._add_stream_event_on_connection(
                     connection,
@@ -798,6 +829,29 @@ class PostgresAgentRepository:
             await DbOutboxSink(connection).add(event)
         del final_output_payload
         return True
+
+    async def _add_agent_message_stream_events_on_connection(
+        self,
+        connection: AsyncDbConnection,
+        *,
+        analysis_id: UUID,
+        agent_id: UUID,
+        turn_id: UUID,
+        response_id: str,
+        agent_message_payloads: list[dict[str, Any]] | None,
+    ) -> None:
+        for payload in agent_message_payloads or []:
+            await self._add_stream_event_on_connection(
+                connection,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                event_type="agent_message",
+                payload=payload,
+                turn_id=turn_id,
+                response_id=response_id,
+                state="completed",
+                idempotency_key=_agent_message_stream_event_idempotency_key(payload, response_id=response_id),
+            )
 
     async def _can_continue(self, connection: AsyncDbConnection, *, analysis_id: UUID, agent_id: UUID) -> bool:
         return await self._lock_continuable_session(connection, analysis_id=analysis_id, agent_id=agent_id)
@@ -1241,3 +1295,14 @@ def _tool_stream_event_idempotency_key(*, event_type: str, openai_call_id: str) 
     if event_type not in TOOL_STREAM_EVENT_TYPES:
         return None
     return f"{event_type}:{openai_call_id}"
+
+
+def _agent_message_stream_event_idempotency_key(payload: dict[str, Any], *, response_id: str) -> str | None:
+    item_id = payload.get("item_id")
+    if item_id:
+        return f"agent_message:{response_id}:{item_id}"
+    text = payload.get("text")
+    if isinstance(text, str) and text:
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        return f"agent_message:{response_id}:{digest}"
+    return None

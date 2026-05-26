@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 COMPOSE_PATH = Path("docker-compose.yml")
+DOCKERFILE_PATH = Path("Dockerfile")
 
 
 class ComposeConfigTest(unittest.TestCase):
@@ -31,6 +32,12 @@ class ComposeConfigTest(unittest.TestCase):
                 self.assertIn("${POSTGRES_PASSWORD:-deepdive}", value)
                 self.assertIn("${POSTGRES_DB:-deepdive}", value)
                 self.assertNotIn("deepdive:deepdive@postgres:5432/deepdive", value)
+
+    def test_backend_image_includes_runtime_prompt_and_profile_files(self) -> None:
+        dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("COPY prompts ./prompts", dockerfile)
+        self.assertIn("COPY profiles ./profiles", dockerfile)
 
 
 if __name__ == "__main__":

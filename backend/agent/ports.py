@@ -22,6 +22,8 @@ class ContextAssemblyRepository(Protocol):
 
     async def load_latest_todo_list(self, *, agent_id: UUID) -> dict[str, Any] | None: ...
 
+    async def load_repository_metadata(self, *, session: AgentSessionState) -> dict[str, Any] | None: ...
+
     async def load_instruction_files(self, *, session: AgentSessionState) -> list[dict[str, Any]]: ...
 
     async def load_config_snapshot(self, *, session: AgentSessionState) -> dict[str, Any] | None: ...
@@ -151,6 +153,7 @@ class AgentToolCallRepository(Protocol):
         analysis_id: UUID,
         agent_id: UUID,
         output_items: list[dict[str, Any]] | None = None,
+        agent_message_payloads: list[dict[str, Any]] | None = None,
     ) -> list[UUID]: ...
 
     async def find_completed_tool_call(
