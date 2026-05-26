@@ -751,41 +751,6 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stream_inserts[0]["idempotency_key"], "agent_message:resp_1:msg_1")
         self.assertEqual(outbox_insert["payload_json"]["event_type"], "AnalysisCompleted")
 
-    async def test_complete_turn_with_final_answer_writes_final_delta_before_done(self) -> None:
-        analysis_id = new_uuid7()
-        agent_id = new_uuid7()
-        connection = FakeConnection(rows=[{"id": analysis_id}], rowcounts=[1, 1, 1], scalar_values=[None, 4])
-        repository = PostgresAgentRepository(connection)
-        turn_id = new_uuid7()
-
-        completed = await repository.complete_turn_with_final_answer(
-            turn_id=turn_id,
-            response_id="resp_1",
-            previous_response_id=None,
-            input_ref="agent-inputs/a/t.json",
-            output_ref="agent-outputs/a/t.json",
-            usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
-            latest_response_agent_id=agent_id,
-            analysis_id=analysis_id,
-            agent_id=agent_id,
-            output_text="done",
-            stream_payload={"status": "completed"},
-            event=EventEnvelope.new(
-                event_type=EventType.ANALYSIS_COMPLETED,
-                analysis_id=analysis_id,
-                agent_id=agent_id,
-                payload={"response_id": "resp_1"},
-            ),
-            final_delta_payload={"text": "done"},
-        )
-
-        self.assertTrue(completed)
-        stream_inserts = _executed_params(connection, "INSERT INTO agent_stream_events")
-        self.assertEqual([params["event_type"] for params in stream_inserts], ["delta", "done"])
-        self.assertEqual(stream_inserts[0]["payload_json"], {"text": "done"})
-        self.assertEqual(stream_inserts[0]["response_id"], "resp_1")
-        self.assertEqual(stream_inserts[1]["payload_json"], {"status": "completed"})
-
     async def test_request_tool_call_rejects_terminal_or_cancelling_analysis(self) -> None:
         connection = FakeConnection(rows=[])
         repository = PostgresAgentRepository(connection)

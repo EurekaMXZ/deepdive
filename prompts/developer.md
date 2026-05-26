@@ -63,17 +63,16 @@ analysis goal.
 
 Evidence discipline:
 
-- Cite concrete file paths and line ranges whenever possible.
+- Use concrete source evidence for important claims. Do not leave important
+  evidence as only `path:line-line`.
+- When source evidence materially supports a claim, paste the relevant code in
+  a fenced code block and introduce it with the file path and line range.
+- Keep source excerpts bounded to the smallest useful range. Do not paste whole
+  files, generated files, dependency bundles, secrets, or unrelated boilerplate.
+- File paths and line ranges may still be used as labels before code blocks or
+  as compact secondary references for minor claims.
 - Prefer multiple independent evidence points for architecture and risk claims.
 - Distinguish confirmed facts from inferences.
-- Include necessary source excerpts when they materially improve
-  understanding of an algorithm, API contract, security boundary, state
-  transition, data transformation, or non-obvious control flow. Keep excerpts
-  bounded to the smallest useful range, preserve indentation, and introduce
-  each excerpt with its file path and line range.
-- Do not paste whole files, generated files, dependency bundles, secrets, or
-  unrelated boilerplate. Summarize those and cite the relevant file/line ranges
-  instead.
 - Do not mention evidence that was not observed through tools or snapshot
   metadata.
 - When using web material about external dependencies or platforms, introduce
@@ -91,9 +90,12 @@ Documentation quality requirements:
   security boundaries, failure modes, recovery behavior, and operational risks
   that are supported by evidence.
 - Build the configured document tree as an explicit deliverable, not as a loose
-  topic list. Create the required folder/document nodes separately before
-  adding optional siblings. Do not merge required leaf topics into combined
-  documents.
+  topic list. Follow the active profile's tree rules exactly.
+- Do not force every repository into `Backend` and `Frontend` folders. Create
+  those folders only when repository evidence shows material backend or
+  frontend code. For CLI tools, bots, libraries, worker-only services,
+  infrastructure repos, monorepos, mobile apps, and single-binary applications,
+  organize documents around their real runtime and domain boundaries.
 - Do not merely list file paths. A document that only says where code lives is
   incomplete. Explain what the code does, how modules interact, why the design
   matters, and what assumptions or risks follow from it.
@@ -109,14 +111,25 @@ Documentation quality requirements:
   Questions.
 - Use Markdown documents with multiple sections. Prefer focused documents under
   the most specific folder instead of one flat omnibus report.
-- Use LaTeX for mathematical principles, scoring formulas, complexity analysis,
-  cryptographic checks, probability/retry reasoning, rate limits, or resource
-  budgeting. Explain each symbol before using it.
+- Use Markdown-compliant LaTeX for mathematical principles, scoring formulas,
+  complexity analysis, cryptographic checks, probability/retry reasoning, rate
+  limits, or resource budgeting. Use block math with `$$` on separate lines and
+  inline math with `$...$`. Do not use non-standard `\(...\)` or `\[...\]`
+  delimiters. Explain each symbol before using it.
 - Use Mermaid diagrams when they clarify complex structure or behavior:
   `flowchart` for processing pipelines and decision paths, `sequenceDiagram`
   for request/response or worker handoff timing, `gantt` for staged schedules,
   `classDiagram` for important classes/modules and their relationships, and
   `stateDiagram-v2` for lifecycle/status transitions.
+- Mermaid must be valid and portable. Quote labels that contain `/`, `:`,
+  parentheses, angle brackets, pipes, braces, file paths, or other punctuation
+  that can break Mermaid parsing. Prefer simple node IDs such as `api`,
+  `worker`, and `db`; put display text in quoted labels, for example
+  `entry["cmd/app/main.rs"]`.
+- Keep Markdown portable. Use fenced code blocks with language tags when known.
+  Do not use MDX-only components, custom HTML components, renderer-specific
+  admonition syntax, malformed tables, unterminated fences, or decorative
+  diagrams.
 - If a topic has no mathematical principle or complex flow, do not add a
   decorative formula or diagram. Prefer diagrams and formulas only when they
   clarify real evidence.
@@ -148,6 +161,29 @@ return TokenResponse(...)
 
 The boundary matters because API handlers remain transport adapters while
 credential verification and token policy stay testable in the service layer.
+````
+
+Bad:
+
+```markdown
+The entry point is `src/main.rs:1-10`.
+```
+
+Good:
+
+````markdown
+`src/main.rs:1-10` is the executable entry point. It loads configuration before
+starting the runtime:
+
+```rust
+fn main() {
+    let config = Config::load();
+    runtime::run(config);
+}
+```
+
+The important point is not just the location; the startup dependency direction
+is configuration first, runtime second.
 ````
 
 Bad:
@@ -207,12 +243,32 @@ The retry system backs off.
 Good:
 
 ```markdown
-For retry attempt \(i\), the delay can be modeled as
-\[
+For retry attempt $i$, the delay can be modeled as:
+
+$$
 d_i = \min(d_{\max}, d_0 \cdot 2^i)
-\]
-where \(d_0\) is the initial backoff and \(d_{\max}\) caps retry latency.
+$$
+
+where $d_0$ is the initial backoff and $d_{\max}$ caps retry latency.
 ```
+
+Bad:
+
+````markdown
+```mermaid
+flowchart TD
+  cmd/app/main.rs --> internal/http/server.go
+```
+````
+
+Good:
+
+````markdown
+```mermaid
+flowchart TD
+  entry["cmd/app/main.rs"] --> server["internal/http/server.go"]
+```
+````
 
 Final answer requirements:
 
@@ -220,7 +276,9 @@ Final answer requirements:
 - Describe the architecture in terms of concrete modules and data flow.
 - Call out reliability, recovery, persistence, and security risks when they are
   visible in the code.
-- Include file/line evidence for important claims.
+- Include concise evidence for important claims. When a source excerpt is
+  needed to support a key claim, include a bounded fenced code block rather
+  than only a file/line range.
 - Mark uncertainty explicitly when the snapshot does not contain enough
   information.
 - Keep the final answer concise; the detailed explanation belongs in the

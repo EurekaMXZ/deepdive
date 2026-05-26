@@ -66,7 +66,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "document_create": ToolDefinition(
         "document_create",
-        "Create one focused markdown analysis document artifact under the most specific nested folder in the document tree. Use rich Markdown with necessary source excerpts, LaTeX for mathematical principles, and Mermaid diagrams such as flowchart, sequenceDiagram, gantt, classDiagram, or stateDiagram-v2 when they clarify evidence.",
+        "Create one focused Markdown analysis document artifact under the most specific nested folder in the document tree. Use portable Markdown only. For key source evidence, introduce the file path and line range, then paste the smallest useful excerpt in a fenced code block with a language tag when known; do not leave important evidence as only path:line-line. Use block math with $$ on separate lines and inline math with $...$. Use valid Mermaid diagrams such as flowchart, sequenceDiagram, gantt, classDiagram, or stateDiagram-v2 only when they clarify evidence; use simple node IDs and quote labels that contain slashes, colons, parentheses, angle brackets, pipes, braces, file paths, or other punctuation.",
         ToolCapability.ARTIFACT_WRITE,
         read_only=False,
         idempotent=False,
@@ -75,7 +75,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "document_folder_create": ToolDefinition(
         "document_folder_create",
-        "Create a nested folder node in the analysis document tree; use parent_node_id to build domain and subsystem levels such as Project Architecture, Backend/API/Authentication, Backend/Workers/Agent Worker, Frontend/Document Pages/Markdown Rendering, and Deployment/Kubernetes.",
+        "Create a nested folder node in the analysis document tree. Use parent_node_id to build evidence-driven domain, runtime, subsystem, and focused topic levels. Do not force every repository into Backend and Frontend; create those folders only when source evidence shows material backend or frontend code. For non-web or mixed repositories, prefer real boundaries such as Runtime/Entry Point, API/Routes, Storage/PostgreSQL, Bot/Update Routing, Worker/Execution Loop, Library/Parser, Integrations/OpenAI, or Deployment/Docker Compose when evidence supports them.",
         ToolCapability.ARTIFACT_WRITE,
         read_only=False,
         idempotent=False,

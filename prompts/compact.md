@@ -55,7 +55,7 @@ Compaction rules:
   unrelated files.
 - Keep completed steps short and operational.
 - Include only facts that were confirmed by tool results, snapshot metadata, or
-  explicit file/line evidence.
+  explicit source evidence references.
 - Keep evidence references compact. Prefer file paths, line ranges, evidence ids,
   result refs, and content hashes over copied source text.
 - Include active hypotheses only when they affect the next action.
