@@ -95,7 +95,9 @@
 
 .login-dialog__github-mark {
   color: #f1f1f1;
-  stroke-width: 2.25;
+  flex: 0 0 auto;
+  height: 18px;
+  width: 18px;
 }
 
 .login-dialog__divider {

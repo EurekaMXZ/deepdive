@@ -1,6 +1,8 @@
 import * as Dialog from '@radix-ui/react-dialog'
-import { GitBranch, LoaderCircle, LockKeyhole, Mail } from 'lucide-react'
+import { LoaderCircle, LockKeyhole, Mail } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
+import { siGithub } from 'simple-icons'
+import type { SimpleIcon } from 'simple-icons'
 
 import {
   createGitHubLoginUrl,
@@ -20,6 +22,28 @@ export type LoginDialogProps = {
   onGitHubLogin?: (url: string) => void
   turnstileEnabled?: boolean
   turnstileSiteKey?: string | null
+}
+
+type SimpleIconMarkProps = {
+  className?: string
+  icon: SimpleIcon
+  size?: number
+}
+
+function SimpleIconMark({ className, icon, size = 18 }: SimpleIconMarkProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+      height={size}
+      viewBox="0 0 24 24"
+      width={size}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d={icon.path} />
+    </svg>
+  )
 }
 
 export function LoginDialog({
@@ -94,7 +118,7 @@ export function LoginDialog({
           <Dialog.Title className="login-dialog__title">DeepDive</Dialog.Title>
 
           <button className="login-dialog__github" type="button" onClick={handleGitHubLogin}>
-            <GitBranch className="login-dialog__github-mark" size={18} aria-hidden="true" />
+            <SimpleIconMark icon={siGithub} className="login-dialog__github-mark" size={18} />
             使用 GitHub 登录
           </button>
 

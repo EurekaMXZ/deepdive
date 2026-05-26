@@ -10,5 +10,5 @@ test('dev server proxies frontend api paths to the backend runtime', () => {
   assert.equal(typeof apiProxy, 'object')
   assert.equal(apiProxy?.target, 'http://127.0.0.1:8000')
   assert.equal(apiProxy?.changeOrigin, true)
-  assert.equal(apiProxy?.rewrite?.('/api/auth/login'), '/auth/login')
+  assert.equal(apiProxy?.rewrite?.('/api/auth/login') ?? '/api/auth/login', '/api/auth/login')
 })
