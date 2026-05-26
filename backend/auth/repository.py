@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from backend.api.pagination import cursor_offset
+from backend.auth.bootstrap_config import BootstrapAdminConfig
 from backend.auth.models import PermissionRecord, RoleRecord, UserRecord
 from backend.auth.passwords import hash_password
 from backend.auth.service import DEFAULT_TENANT_ID, PERMISSION_DESCRIPTIONS, ROLE_PERMISSIONS
@@ -219,6 +220,114 @@ class PostgresAuthRepository:
             raise RuntimeError("created user could not be loaded")
         return user
 
+    async def bootstrap_admin_user(self, config: BootstrapAdminConfig) -> UserRecord:
+        await self.ensure_seed_data()
+        now = datetime.now(UTC)
+        async with self._connection() as connection:
+            await connection.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": "bootstrap_admin"},
+            )
+            existing = await self._user_row_by_email(connection, config.email)
+            roles = await _roles_by_names(connection, ["admin"])
+            if len(roles) != 1:
+                raise RuntimeError("built-in admin role does not exist")
+            admin_role = roles[0]
+
+            if existing is None:
+                user_id = new_uuid7()
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO users (id, tenant_id, email, display_name, is_active, created_at, updated_at)
+                        VALUES (:id, :tenant_id, :email, :display_name, :is_active, :created_at, :updated_at)
+                        """
+                    ),
+                    {
+                        "id": user_id,
+                        "tenant_id": DEFAULT_TENANT_ID,
+                        "email": config.email,
+                        "display_name": config.username,
+                        "is_active": True,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO user_credentials (id, user_id, password_hash, created_at, updated_at)
+                        VALUES (:id, :user_id, :password_hash, :created_at, :updated_at)
+                        """
+                    ),
+                    {
+                        "id": new_uuid7(),
+                        "user_id": user_id,
+                        "password_hash": config.password_hash,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+            else:
+                user_id = cast(UUID, existing["id"])
+                await connection.execute(
+                    text(
+                        """
+                        UPDATE users
+                        SET display_name = :display_name,
+                            is_active = true,
+                            updated_at = :updated_at
+                        WHERE id = :user_id
+                        """
+                    ),
+                    {"user_id": user_id, "display_name": config.username, "updated_at": now},
+                )
+                existing_credential = await self._credential_row_by_user_id(connection, user_id)
+                if existing_credential is None:
+                    await connection.execute(
+                        text(
+                            """
+                            INSERT INTO user_credentials (id, user_id, password_hash, created_at, updated_at)
+                            VALUES (:id, :user_id, :password_hash, :created_at, :updated_at)
+                            """
+                        ),
+                        {
+                            "id": new_uuid7(),
+                            "user_id": user_id,
+                            "password_hash": config.password_hash,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                elif config.update_password_hash:
+                    await connection.execute(
+                        text(
+                            """
+                            UPDATE user_credentials
+                            SET password_hash = :password_hash,
+                                updated_at = :updated_at
+                            WHERE user_id = :user_id
+                            """
+                        ),
+                        {"user_id": user_id, "password_hash": config.password_hash, "updated_at": now},
+                    )
+
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO user_roles (id, user_id, role_id, created_at)
+                    VALUES (:id, :user_id, :role_id, :created_at)
+                    ON CONFLICT (user_id, role_id) DO NOTHING
+                    """
+                ),
+                {"id": new_uuid7(), "user_id": user_id, "role_id": admin_role.id, "created_at": now},
+            )
+
+        user = await self.get_user(user_id)
+        if user is None:
+            raise RuntimeError("bootstrapped admin user could not be loaded")
+        return user
+
     async def get_user_by_email_with_password(self, email: str) -> tuple[UserRecord, str] | None:
         async with self._connection() as connection:
             result = await connection.execute(
@@ -244,19 +353,35 @@ class PostgresAuthRepository:
 
     async def get_user_by_email(self, email: str) -> UserRecord | None:
         async with self._connection() as connection:
-            result = await connection.execute(
-                text(
-                    """
-                    SELECT id
-                    FROM users
-                    WHERE tenant_id = :tenant_id
-                      AND email = :email
-                    """
-                ),
-                {"tenant_id": DEFAULT_TENANT_ID, "email": email},
-            )
-            row = result.mappings().first()
+            row = await self._user_row_by_email(connection, email)
         return None if row is None else await self.get_user(cast(UUID, row["id"]))
+
+    async def _user_row_by_email(self, connection: Any, email: str) -> Mapping[str, Any] | None:
+        result = await connection.execute(
+            text(
+                """
+                SELECT id, tenant_id, email, display_name, is_active, created_at, updated_at
+                FROM users
+                WHERE tenant_id = :tenant_id
+                  AND email = :email
+                """
+            ),
+            {"tenant_id": DEFAULT_TENANT_ID, "email": email},
+        )
+        return result.mappings().first()
+
+    async def _credential_row_by_user_id(self, connection: Any, user_id: UUID) -> Mapping[str, Any] | None:
+        result = await connection.execute(
+            text(
+                """
+                SELECT id, user_id, password_hash, created_at, updated_at
+                FROM user_credentials
+                WHERE user_id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        return result.mappings().first()
 
     async def get_user_by_external_identity(self, provider: str, provider_account_id: str) -> UserRecord | None:
         async with self._connection() as connection:

@@ -21,6 +21,7 @@ from backend.auth import (
     RedisRefreshTokenStore,
     RefreshTokenStore,
 )
+from backend.auth.bootstrap import bootstrap_admin_from_env
 from backend.auth.github import GitHubOAuthConfig, UrlLibGitHubOAuthClient
 from backend.auth.oauth import (
     InMemoryOAuthCodeStore,
@@ -60,6 +61,7 @@ def create_postgres_app(
     async def lifespan(app: FastAPI):
         del app
         try:
+            await bootstrap_admin_from_env(database)
             yield
         finally:
             await database.dispose()

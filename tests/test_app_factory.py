@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from backend.api.app import create_app, create_app_from_env, create_postgres_app
 from backend.api.services import InMemoryAnalysisService, PostgresAnalysisService
@@ -72,6 +72,26 @@ class AppFactoryTest(unittest.TestCase):
         self.assertFalse(hasattr(app.state, "live_stream_hub"))
         self.assertFalse(hasattr(app.state, "live_stream_subscriber"))
         self.assertFalse(hasattr(app.state, "show_model_reasoning_summary"))
+
+    def test_create_postgres_app_bootstraps_admin_during_lifespan_startup(self) -> None:
+        database = FakeDatabase()
+        with (
+            patch("backend.api.app.create_database", return_value=database),
+            patch("backend.api.app.bootstrap_admin_from_env", new_callable=AsyncMock) as bootstrap,
+            TestClient(create_postgres_app(database_url="postgresql+psycopg://deepdive:deepdive@localhost:5432/deepdive")),
+        ):
+            pass
+
+        bootstrap.assert_awaited_once_with(database)
+        self.assertTrue(database.disposed)
+
+
+class FakeDatabase:
+    def __init__(self) -> None:
+        self.disposed = False
+
+    async def dispose(self) -> None:
+        self.disposed = True
 
 
 if __name__ == "__main__":
