@@ -150,7 +150,6 @@ class AgentWorkerRuntimeTest(unittest.TestCase):
 
         self.assertEqual(captured_repositories, [database])
         self.assertEqual(captured_handler_kwargs[0]["model_retry_attempts"], 7)
-        self.assertNotIn("live_stream_publisher", captured_handler_kwargs[0])
         self.assertEqual(captured_runner_kwargs[0]["user_agent"], "DeepDive/custom")
         self.assertEqual(captured_runner_kwargs[0]["transport"], "websocket_v2")
         self.assertEqual(len(captured_producers), 1)

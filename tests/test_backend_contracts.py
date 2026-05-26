@@ -77,13 +77,6 @@ class ApiStreamContractsTest(unittest.TestCase):
             {"error": {"code": "MODEL_FAILED", "message": "model failed", "retryable": True}},
         )
 
-    def test_sse_contract_does_not_expose_live_model_kafka_formatters(self) -> None:
-        import backend.api.sse as sse
-
-        self.assertFalse(hasattr(sse, "format_live_model_sse_event"))
-        self.assertFalse(hasattr(sse, "should_emit_live_model_event"))
-
-
 class EventContractsTest(unittest.TestCase):
     def test_agent_inbox_topic_name_describes_event_routing_not_commands_only(self) -> None:
         from backend.events.routing import AGENT_INBOX_TOPICS

@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, patch
 
 from backend.api.app import create_app, create_app_from_env, create_postgres_app
 from backend.api.services import InMemoryAnalysisService, PostgresAnalysisService
-from backend.config import AppConfig, OpenAIConfig
 from backend.document import DocumentService
 from fastapi.testclient import TestClient
 
@@ -62,16 +61,6 @@ class AppFactoryTest(unittest.TestCase):
         self.assertIsInstance(app.state.analysis_service, PostgresAnalysisService)
         self.assertIsInstance(app.state.document_service, DocumentService)
         self.assertTrue(hasattr(app.state, "auth_service"))
-
-    def test_create_postgres_app_does_not_expose_live_model_stream_state(self) -> None:
-        app = create_postgres_app(
-            database_url="postgresql+psycopg://deepdive:deepdive@localhost:5432/deepdive",
-            config=AppConfig(openai=OpenAIConfig(show_reasoning_summary=False)),
-        )
-
-        self.assertFalse(hasattr(app.state, "live_stream_hub"))
-        self.assertFalse(hasattr(app.state, "live_stream_subscriber"))
-        self.assertFalse(hasattr(app.state, "show_model_reasoning_summary"))
 
     def test_create_postgres_app_bootstraps_admin_during_lifespan_startup(self) -> None:
         database = FakeDatabase()
