@@ -28,7 +28,11 @@ class AgentContextStore:
                 "content": [
                     {
                         "type": "input_text",
-                        "text": "请分析这个仓库的源码结构。先使用 list_files/search_file/search_text/read_file 获取证据, 再给出结论。",
+                        "text": (
+                            "请分析这个仓库的源码结构。先使用 list_files/search_file/search_text/read_file "
+                            "获取证据；如果文档工具可用, 将最终材料沉淀为多级 Markdown document artifacts, "
+                            "并按 profile 要求补充必要源码片段、LaTeX 说明和 Mermaid 图。"
+                        ),
                     }
                 ],
             }

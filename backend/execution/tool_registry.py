@@ -66,7 +66,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "document_create": ToolDefinition(
         "document_create",
-        "Create one focused markdown analysis document artifact under the most specific nested folder in the document tree.",
+        "Create one focused markdown analysis document artifact under the most specific nested folder in the document tree. Use rich Markdown with necessary source excerpts, LaTeX for mathematical principles, and Mermaid diagrams such as flowchart, sequenceDiagram, gantt, classDiagram, or stateDiagram-v2 when they clarify evidence.",
         ToolCapability.ARTIFACT_WRITE,
         read_only=False,
         idempotent=False,
@@ -75,7 +75,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     ),
     "document_folder_create": ToolDefinition(
         "document_folder_create",
-        "Create a nested folder node in the analysis document tree; use parent_node_id to build domain and subsystem levels.",
+        "Create a nested folder node in the analysis document tree; use parent_node_id to build domain and subsystem levels such as Project Architecture, Backend/API/Authentication, Backend/Workers/Agent Worker, Frontend/Document Pages/Markdown Rendering, and Deployment/Kubernetes.",
         ToolCapability.ARTIFACT_WRITE,
         read_only=False,
         idempotent=False,

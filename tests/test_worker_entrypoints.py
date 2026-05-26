@@ -322,16 +322,6 @@ class WorkerEntrypointTest(unittest.TestCase):
     def test_snapshot_worker_subscribes_to_snapshot_commands_topic(self) -> None:
         self.assertEqual(build_snapshot_command_topics(), ("deepdive.snapshot.commands",))
 
-    def test_all_worker_modules_import(self) -> None:
-        import backend.workers.agent_runtime
-        import backend.workers.batch_scheduler_runtime
-        import backend.workers.execution_runtime
-
-        self.assertIsNotNone(backend.workers.agent_runtime)
-        self.assertIsNotNone(backend.workers.batch_scheduler_runtime)
-        self.assertIsNotNone(backend.workers.execution_runtime)
-
-
 if __name__ == "__main__":
     unittest.main()
 

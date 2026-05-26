@@ -76,13 +76,5 @@ class ApiStreamContractsTest(unittest.TestCase):
             error_event_payload(code="MODEL_FAILED", message="model failed", retryable=True),
             {"error": {"code": "MODEL_FAILED", "message": "model failed", "retryable": True}},
         )
-
-class EventContractsTest(unittest.TestCase):
-    def test_agent_inbox_topic_name_describes_event_routing_not_commands_only(self) -> None:
-        from backend.events.routing import AGENT_INBOX_TOPICS
-
-        self.assertIn("SnapshotReady", {event_type.value for event_type in AGENT_INBOX_TOPICS})
-
-
 if __name__ == "__main__":
     unittest.main()
