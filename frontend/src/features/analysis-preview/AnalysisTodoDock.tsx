@@ -8,7 +8,7 @@ type AnalysisTodoDockProps = {
 }
 
 export function AnalysisTodoDock({ todo }: AnalysisTodoDockProps) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(getInitialTodoDockOpen)
 
   if (!todo || todo.items.length === 0) {
     return null
@@ -54,6 +54,15 @@ export function AnalysisTodoDock({ todo }: AnalysisTodoDockProps) {
       </section>
     </aside>
   )
+}
+
+function getInitialTodoDockOpen() {
+  if (typeof window === 'undefined') {
+    return true
+  }
+
+  const isMobileViewport = window.matchMedia('(max-width: 900px)').matches
+  return !isMobileViewport
 }
 
 function TodoItem({ item }: { item: AnalysisTodoItem }) {

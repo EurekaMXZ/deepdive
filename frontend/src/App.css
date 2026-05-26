@@ -1509,6 +1509,71 @@
   display: block;
 }
 
+.rich-markdown {
+  --background: #111;
+  --foreground: #e7e7e7;
+  --card: #141414;
+  --card-foreground: #ededed;
+  --muted: #1d1d1d;
+  --muted-foreground: #9d9d9d;
+  --border: #2a2a2a;
+  --input: #303030;
+  --primary: #f1f1f1;
+  --primary-foreground: #0b0b0b;
+  --radius: 0.625rem;
+}
+
+.rich-markdown [data-streamdown='code-block-body'],
+.rich-markdown .shiki,
+.rich-markdown [data-streamdown='mermaid'],
+.rich-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.rich-markdown .shiki {
+  background: #111 !important;
+}
+
+.rich-markdown [data-line],
+.rich-markdown [data-streamdown='line'] {
+  min-height: 1.5em;
+}
+
+.rich-markdown [data-streamdown='code-block-body'] pre,
+.rich-markdown [data-streamdown='code-block-body'] code,
+.rich-markdown .shiki,
+.rich-markdown .shiki code {
+  white-space: pre;
+}
+
+.rich-markdown [data-streamdown='code-block-body'] code,
+.rich-markdown .shiki code {
+  min-width: max-content;
+  display: block;
+}
+
+.rich-markdown [data-streamdown='mermaid'] {
+  margin: 18px 0;
+  padding: 12px;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+}
+
+.rich-markdown [data-streamdown='mermaid'] svg {
+  max-width: none;
+}
+
+.rich-markdown .katex-display {
+  margin: 18px 0;
+  padding: 10px 0;
+}
+
+.rich-markdown .katex {
+  color: #f1f1f1;
+}
+
 .analysis-tool-body {
   min-width: 0;
   display: grid;
@@ -1579,6 +1644,7 @@
 
 .analysis-todo-dock__trigger {
   display: none;
+  border-radius: 999px;
 }
 
 .analysis-todo-dock__panel {
@@ -1589,6 +1655,7 @@
   color: #ececec;
   background: rgba(13, 13, 13, 0.94);
   border: 1px solid #2b2b2b;
+  border-radius: 14px;
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
   pointer-events: auto;
   backdrop-filter: blur(12px);
@@ -1623,12 +1690,13 @@
 .analysis-todo-dock__close {
   width: 28px;
   height: 28px;
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   color: #bdbdbd;
   background: transparent;
   border: 0;
+  border-radius: 8px;
   cursor: pointer;
 }
 
@@ -1697,6 +1765,38 @@
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.analysis-todo-dock[data-open='false'] .analysis-todo-dock__panel {
+  display: none;
+}
+
+.analysis-todo-dock[data-open='false'] .analysis-todo-dock__trigger {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  justify-self: end;
+  padding: 0 12px;
+  color: #f0f0f0;
+  background: #111;
+  border: 1px solid #2b2b2b;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.44);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.analysis-todo-dock__trigger strong {
+  color: #9c9c9c;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.analysis-todo-dock__trigger:hover,
+.analysis-todo-dock__trigger:focus-visible {
+  background: #1c1c1c;
+  border-color: #3c3c3c;
 }
 
 @keyframes analysis-stream-pulse {
@@ -2336,31 +2436,7 @@ input:focus-visible {
   }
 
   .analysis-todo-dock__trigger {
-    min-height: 38px;
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    justify-self: end;
-    padding: 0 12px;
-    color: #f0f0f0;
-    background: #111;
-    border: 1px solid #2b2b2b;
-    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.44);
-    cursor: pointer;
-    pointer-events: auto;
-  }
-
-  .analysis-todo-dock__trigger strong {
-    color: #9c9c9c;
-    font-size: 12px;
-    font-weight: 680;
-  }
-
-  .analysis-todo-dock__trigger:hover,
-  .analysis-todo-dock__trigger:focus-visible {
-    background: #1c1c1c;
-    border-color: #3c3c3c;
   }
 
   .analysis-todo-dock__panel {
@@ -2376,10 +2452,6 @@ input:focus-visible {
 
   .analysis-todo-dock[data-open='true'] .analysis-todo-dock__trigger {
     display: none;
-  }
-
-  .analysis-todo-dock__close {
-    display: inline-flex;
   }
 
 }

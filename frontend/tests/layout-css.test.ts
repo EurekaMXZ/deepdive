@@ -22,7 +22,7 @@ test('analysis detail layout uses a single stream column without a right activit
   assertCssRule('.analysis-stream-item', ['min-width: 0'])
 })
 
-test('analysis todo dock floats beside the stream and collapses on mobile', () => {
+test('analysis todo dock floats beside the stream and can collapse into a rounded trigger', () => {
   assertCssRule('.analysis-preview', ['position: relative'])
   assertCssRule('.analysis-todo-dock', [
     'position: absolute',
@@ -30,7 +30,15 @@ test('analysis todo dock floats beside the stream and collapses on mobile', () =
     'right: 16px',
     'transform: translateY(-50%)',
   ])
-  assertCssRule('.analysis-todo-dock__trigger', ['display: none'])
+  assertCssRule('.analysis-todo-dock__trigger', ['display: none', 'border-radius: 999px'])
+  assertCssRule('.analysis-todo-dock__panel', ['border-radius: 14px'])
+  assertCssRule('.analysis-todo-dock__close', ['display: inline-flex'])
+  assertCssRule('.analysis-todo-dock[data-open=\'false\'] .analysis-todo-dock__panel', [
+    'display: none',
+  ])
+  assertCssRule('.analysis-todo-dock[data-open=\'false\'] .analysis-todo-dock__trigger', [
+    'display: inline-flex',
+  ])
   assertCssRule('.analysis-todo-dock__item[data-status=\'completed\'] .analysis-todo-dock__title', [
     'text-decoration: line-through',
   ])
@@ -47,6 +55,9 @@ test('analysis todo dock floats beside the stream and collapses on mobile', () =
   ])
   assertCssRuleInMedia('@media (max-width: 900px)', '.analysis-todo-dock[data-open=\'true\'] .analysis-todo-dock__panel', [
     'display: grid',
+  ])
+  assertCssRuleInMedia('@media (max-width: 900px)', '.analysis-todo-dock[data-open=\'true\'] .analysis-todo-dock__trigger', [
+    'display: none',
   ])
 })
 

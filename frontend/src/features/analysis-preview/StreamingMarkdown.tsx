@@ -1,6 +1,4 @@
-import { lazy, Suspense } from 'react'
-
-const Streamdown = lazy(() => import('streamdown').then((module) => ({ default: module.Streamdown })))
+import { RichMarkdown } from '../markdown-renderer'
 
 type StreamingMarkdownProps = {
   animated?: boolean
@@ -18,20 +16,13 @@ export function StreamingMarkdown({
   value,
 }: StreamingMarkdownProps) {
   return (
-    <Suspense fallback={<pre className={fallbackClassName}>{value}</pre>}>
-      <Streamdown
-        animated={animated && streaming ? { animation: 'fadeIn', duration: 120, stagger: 12 } : false}
-        caret={streaming ? 'block' : undefined}
-        className={className}
-        controls={false}
-        isAnimating={streaming}
-        lineNumbers={false}
-        mode={streaming ? 'streaming' : 'static'}
-        parseIncompleteMarkdown={streaming}
-        skipHtml
-      >
-        {value}
-      </Streamdown>
-    </Suspense>
+    <RichMarkdown
+      animated={animated}
+      caret={streaming}
+      className={className}
+      fallbackClassName={fallbackClassName}
+      mode={streaming ? 'streaming' : 'static'}
+      value={value}
+    />
   )
 }
