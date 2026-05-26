@@ -397,7 +397,10 @@ class PostgresAgentRepository:
                     input_ref = :input_ref,
                     output_ref = :output_ref,
                     input_token_count = :input_token_count,
+                    cached_input_token_count = :cached_input_token_count,
+                    uncached_input_token_count = :uncached_input_token_count,
                     output_token_count = :output_token_count,
+                    reasoning_token_count = :reasoning_token_count,
                     total_token_count = :total_token_count,
                     completed_at = :completed_at
                 WHERE id = :turn_id
@@ -411,7 +414,10 @@ class PostgresAgentRepository:
                 "input_ref": kwargs.get("input_ref"),
                 "output_ref": kwargs.get("output_ref"),
                 "input_token_count": usage.get("input_tokens"),
+                "cached_input_token_count": usage.get("cached_input_tokens"),
+                "uncached_input_token_count": usage.get("uncached_input_tokens"),
                 "output_token_count": usage.get("output_tokens"),
+                "reasoning_token_count": usage.get("reasoning_tokens"),
                 "total_token_count": usage.get("total_tokens"),
                 "completed_at": datetime.now(UTC),
             },

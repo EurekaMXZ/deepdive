@@ -169,7 +169,11 @@ class DatabaseMigrationTest(unittest.TestCase):
             r"create\s+unique\s+index\s+uq_agent_turns_agent_trigger_event\s+on\s+agent_turns"
             r"\s+\(agent_id,\s*trigger_event_id\)",
         )
-        self.assertRegex(_create_table_body(sql, "agent_turns"), r"\btrigger_domain_key\s+text\b")
+        agent_turns_body = _create_table_body(sql, "agent_turns")
+        self.assertRegex(agent_turns_body, r"\btrigger_domain_key\s+text\b")
+        self.assertRegex(agent_turns_body, r"\bcached_input_token_count\s+integer\b")
+        self.assertRegex(agent_turns_body, r"\buncached_input_token_count\s+integer\b")
+        self.assertRegex(agent_turns_body, r"\breasoning_token_count\s+integer\b")
         self.assertRegex(
             sql,
             r"create\s+unique\s+index\s+uq_agent_turns_agent_trigger_domain\s+on\s+agent_turns"

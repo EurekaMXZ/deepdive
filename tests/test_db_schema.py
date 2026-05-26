@@ -223,6 +223,9 @@ class DatabaseSchemaTest(unittest.TestCase):
             {_columns(index) for index in turns.indexes if index.unique},
         )
         self.assertIn("trigger_domain_key", turns.c)
+        self.assertIn("cached_input_token_count", turns.c)
+        self.assertIn("uncached_input_token_count", turns.c)
+        self.assertIn("reasoning_token_count", turns.c)
         self.assertIn(
             ("agent_id", "trigger_domain_key"),
             {_columns(index) for index in turns.indexes if index.unique},

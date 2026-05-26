@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, cast
 from uuid import UUID
@@ -315,6 +316,7 @@ class AgentCommandHandler:
             "service_tier": session.effective_runtime_json.get("service_tier", self._config.openai.service_tier),
             "on_raw_sse_event": on_raw_sse_event,
         }
+        self._apply_prompt_cache_controls(request, session=session)
         context_management = self._context_management(session=session)
         if context_management:
             request["context_management"] = context_management
@@ -584,10 +586,13 @@ class AgentCommandHandler:
     ) -> CompactionDecision | None:
         try:
             compaction = await self._responses_runner.compact_response(
-                {
-                    "model": session.effective_model,
-                    "input": context["input"],
-                }
+                self._request_with_prompt_cache_controls(
+                    {
+                        "model": session.effective_model,
+                        "input": context["input"],
+                    },
+                    session=session,
+                )
             )
         except Exception:
             return None
@@ -654,6 +659,7 @@ class AgentCommandHandler:
             "service_tier": session.effective_runtime_json.get("service_tier", self._config.openai.service_tier),
             "metadata": {"purpose": "remote_compact_v2"},
         }
+        self._apply_prompt_cache_controls(request, session=session)
         if context.get("include"):
             request["include"] = context["include"]
         try:
@@ -735,6 +741,7 @@ class AgentCommandHandler:
             "service_tier": session.effective_runtime_json.get("service_tier", self._config.openai.service_tier),
             "metadata": {"purpose": "local_compact"},
         }
+        self._apply_prompt_cache_controls(request, session=session)
         try:
             response = await self._responses_runner.create_response(request)
         except Exception:
@@ -788,6 +795,24 @@ class AgentCommandHandler:
         if threshold <= 0:
             return []
         return [{"type": "compaction", "compact_threshold": threshold}]
+
+    def _request_with_prompt_cache_controls(
+        self, request: dict[str, Any], *, session: AgentSessionState
+    ) -> dict[str, Any]:
+        self._apply_prompt_cache_controls(request, session=session)
+        return request
+
+    def _apply_prompt_cache_controls(self, request: dict[str, Any], *, session: AgentSessionState) -> None:
+        request["prompt_cache_key"] = _prompt_cache_key(session=session)
+        prompt_cache_retention = str(
+            session.effective_runtime_json.get(
+                "prompt_cache_retention",
+                self._config.openai.prompt_cache_retention or "",
+            )
+            or ""
+        ).strip()
+        if prompt_cache_retention:
+            request["prompt_cache_retention"] = prompt_cache_retention
 
     async def _create_response_with_optional_context_management(self, request: dict[str, Any]) -> ModelResponse:
         try:
@@ -1622,3 +1647,8 @@ def _trigger_domain_key(event: EventEnvelope) -> str | None:
         if reason:
             return f"{event.event_type.value}:{reason}"
     return None
+
+
+def _prompt_cache_key(*, session: AgentSessionState) -> str:
+    thread_hash = hashlib.sha256(str(session.agent_id).encode()).hexdigest()[:24]
+    return f"dd:thread:{thread_hash}"

@@ -45,17 +45,28 @@ class ContextAssembler:
         include_base_context: bool = True,
         persist: bool = True,
     ) -> dict[str, Any]:
+        instruction_refs: list[dict[str, Any]] = []
         if override_input_items is not None:
             input_items = list(override_input_items)
         else:
-            input_items = await self._repository.load_context_items(session=session) if include_base_context else []
-            input_items.extend(extra_items or [])
+            base_input_items = await self._repository.load_context_items(session=session) if include_base_context else []
+            stable_input_items, dynamic_input_items = _split_dynamic_context_items(base_input_items)
+            input_items = stable_input_items
+            if include_base_context:
+                instruction_item, instruction_refs = await self._instruction_context(
+                    session=session,
+                    focus_paths=_extract_focus_paths(stable_input_items),
+                )
+                if instruction_item is not None:
+                    input_items.append(instruction_item)
             if include_local_history:
                 local_history_items = await self._local_history_context_items(
                     session=session,
                     exclude_call_ids=_call_ids_from_items(extra_items or []),
                 )
                 input_items.extend(local_history_items)
+            input_items.extend(dynamic_input_items)
+            input_items.extend(extra_items or [])
         config = app_config_from_json(await self._repository.load_config_snapshot(session=session))
         profile = config.analysis.profiles[config.analysis.default_profile]
         system_instruction = config.prompt.system_instruction or DEFAULT_SYSTEM_INSTRUCTION
@@ -85,21 +96,20 @@ class ContextAssembler:
             source_refs.append(
                 {"type": "profile", "ref": f"profile:{profile.goal_file}", "hash": _sha256_text(profile.goal)}
             )
-        if include_base_context and override_input_items is None:
-            instruction_item, instruction_refs = await self._instruction_context(
-                session=session,
-                focus_paths=_extract_focus_paths(input_items),
-            )
-            if instruction_item is not None:
-                input_items.append(instruction_item)
-                source_refs.extend(instruction_refs)
+        if override_input_items is None:
+            source_refs.extend(instruction_refs)
+        response_tools = ToolRegistry.from_config(config.tools).response_tools()
         payload = {
             "instructions": instructions,
             "input": input_items,
             "source_refs": source_refs,
         }
-        response_tools = ToolRegistry.from_config(config.tools).response_tools()
-        token_estimate = _estimate_tokens(payload)
+        token_estimate = _estimate_tokens(
+            {
+                **payload,
+                "tools": response_tools,
+            }
+        )
         input_ref = f"agent-inputs/{session.agent_id}/{turn_id}.json"
         if persist:
             encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
@@ -264,6 +274,24 @@ def _sha256_json(value: Any) -> str:
 
 def _estimate_tokens(value: Any) -> int:
     return max(1, len(json.dumps(value, ensure_ascii=False)) // 4)
+
+
+def _split_dynamic_context_items(input_items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    stable_items: list[dict[str, Any]] = []
+    dynamic_items: list[dict[str, Any]] = []
+    for item in input_items:
+        if _is_dynamic_context_item(item):
+            dynamic_items.append(item)
+        else:
+            stable_items.append(item)
+    return stable_items, dynamic_items
+
+
+def _is_dynamic_context_item(item: dict[str, Any]) -> bool:
+    return any(
+        text_value.startswith(("已 compact 的上下文摘要:", "当前 TODO 计划:"))
+        for text_value in _input_text_values(item)
+    )
 
 
 def _extract_focus_paths(input_items: list[dict[str, Any]]) -> set[str]:

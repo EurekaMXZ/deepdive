@@ -25,6 +25,7 @@ class OpenAIConfig:
     service_tier: str = "fast"
     parallel_tool_calls: bool = False
     use_previous_response_id: bool = False
+    prompt_cache_retention: str | None = "24h"
     transport: str = "http"
     show_reasoning_summary: bool = True
 
@@ -225,6 +226,7 @@ def load_app_config_from_env() -> AppConfig:
             use_previous_response_id=_bool_env(
                 os.environ.get("OPENAI_USE_PREVIOUS_RESPONSE_ID", str(default.openai.use_previous_response_id))
             ),
+            prompt_cache_retention=_prompt_cache_retention_env(default.openai.prompt_cache_retention),
             transport=os.environ.get("OPENAI_TRANSPORT", default.openai.transport),
             show_reasoning_summary=_bool_env(
                 os.environ.get("API_SHOW_MODEL_REASONING_SUMMARY", str(default.openai.show_reasoning_summary))
@@ -346,6 +348,21 @@ def _optional_env(name: str) -> str | None:
     return value.strip()
 
 
+def _prompt_cache_retention_env(default: str | None) -> str | None:
+    if "OPENAI_PROMPT_CACHE_RETENTION" not in os.environ:
+        return default
+    return _prompt_cache_retention_value(os.environ.get("OPENAI_PROMPT_CACHE_RETENTION"))
+
+
+def _prompt_cache_retention_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    if not text_value or text_value.lower() in {"none", "off", "false", "disabled"}:
+        return None
+    return text_value
+
+
 def _read_optional_text_file(path_value: str) -> str | None:
     path = Path(path_value)
     if not path.is_absolute():
@@ -437,6 +454,9 @@ def app_config_from_json(config_json: dict[str, Any] | None) -> AppConfig:
             parallel_tool_calls=False,
             use_previous_response_id=_bool_value(
                 openai_json.get("use_previous_response_id"), default.openai.use_previous_response_id
+            ),
+            prompt_cache_retention=_prompt_cache_retention_value(
+                openai_json.get("prompt_cache_retention", default.openai.prompt_cache_retention)
             ),
             transport=str(openai_json.get("transport") or default.openai.transport),
             show_reasoning_summary=_bool_value(

@@ -368,7 +368,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         )
 
         encoded_input = runner.requests[0]["input"]
-        instruction_item = encoded_input[-1]
+        instruction_item = encoded_input[1]
         self.assertEqual(instruction_item["role"], "user")
         instruction_text = instruction_item["content"][0]["text"]
         self.assertIn("AGENTS.md", instruction_text)
@@ -453,7 +453,8 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         refs = repository.latest_context_assembly["source_refs_json"]
         self.assertNotIn("instructions/frontend.md", [ref["ref"] for ref in refs])
 
-    async def test_context_includes_local_replay_history_when_requested(self) -> None:
+    async def test_context_places_stable_agent_instructions_before_local_replay_history(self) -> None:
+        storage = FakeStorage({"instructions/root.md": b"Root guidance\n"})
         repository = FakeAgentRepository(
             session=AgentSessionState(
                 analysis_id=new_uuid7(),
@@ -491,6 +492,15 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                     },
                 },
             ],
+            instruction_files=[
+                {
+                    "path": "AGENTS.md",
+                    "scope_path": "",
+                    "depth": 0,
+                    "content_hash": "sha256:root",
+                    "content_ref": "instructions/root.md",
+                }
+            ],
             latest_memory_summary={
                 "completed_steps": ["已查看 README"],
                 "confirmed_facts": ["这是 Vite 项目"],
@@ -498,7 +508,7 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+        context = await ContextAssembler(repository=repository, storage=storage).assemble(
             session=repository.session,
             turn_id=repository.turn_id,
             include_local_history=True,
@@ -514,6 +524,255 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replayed_payloads[0]["name"], "read_file")
         self.assertIn("package.json", replayed_payloads[0]["arguments"])
         self.assertIn("这是 Vite 项目", context_text)
+        instruction_index = next(
+            index
+            for index, item in enumerate(context["input"])
+            if "Root guidance" in "\n".join(_text_parts([item]))
+        )
+        first_replay_index = next(
+            index
+            for index, item in enumerate(context["input"])
+            if item.get("type") in {"function_call", "function_call_output"}
+        )
+        self.assertLess(instruction_index, first_replay_index)
+
+    async def test_context_places_stable_agent_instructions_before_ready_tool_outputs(self) -> None:
+        storage = FakeStorage({"instructions/root.md": b"Root guidance\n"})
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=1,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            instruction_files=[
+                {
+                    "path": "AGENTS.md",
+                    "scope_path": "",
+                    "depth": 0,
+                    "content_hash": "sha256:root",
+                    "content_ref": "instructions/root.md",
+                }
+            ],
+        )
+
+        context = await ContextAssembler(repository=repository, storage=storage).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+            extra_items=[
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": '{"ok":true,"result":{"path":"backend/api/app.py"}}',
+                }
+            ],
+        )
+
+        instruction_index = next(
+            index
+            for index, item in enumerate(context["input"])
+            if "Root guidance" in "\n".join(_text_parts([item]))
+        )
+        tool_output_index = next(
+            index for index, item in enumerate(context["input"]) if item.get("type") == "function_call_output"
+        )
+        self.assertLess(instruction_index, tool_output_index)
+
+    async def test_context_places_stable_agent_instructions_before_dynamic_memory_and_todo(self) -> None:
+        storage = FakeStorage({"instructions/root.md": b"Root guidance\n"})
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=1,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            instruction_files=[
+                {
+                    "path": "AGENTS.md",
+                    "scope_path": "",
+                    "depth": 0,
+                    "content_hash": "sha256:root",
+                    "content_ref": "instructions/root.md",
+                }
+            ],
+            latest_memory_summary={
+                "confirmed_facts": ["动态 compact 摘要"],
+                "next_action": "继续分析",
+            },
+            latest_todo_list={
+                "version": 2,
+                "items": [{"id": "write-summary", "title": "Write summary", "status": "in_progress"}],
+                "note": "动态 TODO",
+            },
+        )
+
+        context = await ContextAssembler(repository=repository, storage=storage).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+        )
+
+        instruction_index = next(
+            index
+            for index, item in enumerate(context["input"])
+            if "Root guidance" in "\n".join(_text_parts([item]))
+        )
+        memory_index = next(
+            index
+            for index, item in enumerate(context["input"])
+            if "已 compact 的上下文摘要" in "\n".join(_text_parts([item]))
+        )
+        todo_index = next(
+            index for index, item in enumerate(context["input"]) if "当前 TODO 计划" in "\n".join(_text_parts([item]))
+        )
+        self.assertLess(instruction_index, memory_index)
+        self.assertLess(instruction_index, todo_index)
+
+    async def test_context_places_replay_history_before_dynamic_memory_todo_and_current_tool_outputs(self) -> None:
+        storage = FakeStorage({"instructions/root.md": b"Root guidance\n"})
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="waiting_tool",
+                effective_model="gpt-5.5",
+                latest_response_id="resp_1",
+                turn_count=2,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+            instruction_files=[
+                {
+                    "path": "AGENTS.md",
+                    "scope_path": "",
+                    "depth": 0,
+                    "content_hash": "sha256:root",
+                    "content_ref": "instructions/root.md",
+                }
+            ],
+            uncompacted_context_items=[
+                {
+                    "seq": 1,
+                    "item_type": "function_call",
+                    "payload_json": {
+                        "type": "function_call",
+                        "call_id": "call_history",
+                        "name": "read_file",
+                        "arguments": '{"path":"README.md"}',
+                    },
+                },
+                {
+                    "seq": 2,
+                    "item_type": "function_call_output",
+                    "payload_json": {
+                        "type": "function_call_output",
+                        "call_id": "call_history",
+                        "output": '{"ok":true,"result":{"path":"README.md"}}',
+                    },
+                },
+            ],
+            latest_memory_summary={"next_action": "动态 compact 摘要"},
+            latest_todo_list={
+                "version": 3,
+                "items": [{"id": "current", "title": "Current work", "status": "in_progress"}],
+            },
+        )
+
+        context = await ContextAssembler(repository=repository, storage=storage).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+            extra_items=[
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_current",
+                    "output": '{"ok":true,"result":{"path":"backend/api/app.py"}}',
+                }
+            ],
+            include_local_history=True,
+        )
+
+        history_index = next(
+            index
+            for index, item in enumerate(context["input"])
+            if item.get("type") == "function_call" and item.get("call_id") == "call_history"
+        )
+        memory_index = next(
+            index
+            for index, item in enumerate(context["input"])
+            if "已 compact 的上下文摘要" in "\n".join(_text_parts([item]))
+        )
+        todo_index = next(
+            index for index, item in enumerate(context["input"]) if "当前 TODO 计划" in "\n".join(_text_parts([item]))
+        )
+        current_output_index = next(
+            index
+            for index, item in enumerate(context["input"])
+            if item.get("type") == "function_call_output" and item.get("call_id") == "call_current"
+        )
+
+        self.assertLess(history_index, memory_index)
+        self.assertLess(history_index, todo_index)
+        self.assertLess(history_index, current_output_index)
+
+    async def test_context_token_estimate_includes_tool_schema(self) -> None:
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=new_uuid7(),
+                agent_id=new_uuid7(),
+                snapshot_id=new_uuid7(),
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=1,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+        )
+
+        context = await ContextAssembler(repository=repository, storage=FakeStorage()).assemble(
+            session=repository.session,
+            turn_id=repository.turn_id,
+        )
+
+        prompt_only_estimate = len(
+            json.dumps(
+                {
+                    "instructions": context["instructions"],
+                    "input": context["input"],
+                    "source_refs": repository.latest_context_assembly["source_refs_json"],
+                },
+                ensure_ascii=False,
+            )
+        ) // 4
+        self.assertGreater(context["token_estimate"], prompt_only_estimate)
+        self.assertEqual(repository.latest_context_assembly["token_estimate"], context["token_estimate"])
 
     async def test_context_includes_latest_todo_snapshot(self) -> None:
         repository = FakeAgentRepository(
@@ -3050,6 +3309,224 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(handler._responses_runner.requests[0]["service_tier"], "priority")
 
+    async def test_responses_request_includes_stable_prompt_cache_controls(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        config_snapshot_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=config_snapshot_id,
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={
+                    "reasoning_effort": "low",
+                    "parallel_tool_calls": False,
+                    "prompt_cache_retention": "24h",
+                },
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=FakeResponsesRunner(
+                ModelResponse(
+                    response_id="resp_1",
+                    output_text="done",
+                    tool_calls=[],
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                )
+            ),
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        request = handler._responses_runner.requests[0]
+        self.assertTrue(request["prompt_cache_key"].startswith("dd:thread:"))
+        self.assertLessEqual(len(request["prompt_cache_key"]), 64)
+        self.assertNotIn(str(snapshot_id), request["prompt_cache_key"])
+        self.assertNotIn(str(config_snapshot_id), request["prompt_cache_key"])
+        self.assertNotIn(str(analysis_id), request["prompt_cache_key"])
+        self.assertNotIn(str(agent_id), request["prompt_cache_key"])
+        self.assertEqual(request["prompt_cache_retention"], "24h")
+
+    async def test_prompt_cache_key_is_stable_across_turns_for_same_agent_thread(self) -> None:
+        snapshot_id = new_uuid7()
+        agent_id = new_uuid7()
+        analysis_id = new_uuid7()
+        requests: list[dict] = []
+        for _ in range(2):
+            repository = FakeAgentRepository(
+                session=AgentSessionState(
+                    analysis_id=analysis_id,
+                    agent_id=agent_id,
+                    snapshot_id=snapshot_id,
+                    config_snapshot_id=new_uuid7(),
+                    status="queued",
+                    effective_model="gpt-5.5",
+                    latest_response_id=None,
+                    turn_count=0,
+                    max_turns=10,
+                    effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                    effective_runtime_json={
+                        "reasoning_effort": "low",
+                        "parallel_tool_calls": False,
+                        "prompt_cache_retention": "24h",
+                    },
+                ),
+                turn_id=new_uuid7(),
+                tool_call_id=new_uuid7(),
+            )
+            runner = FakeResponsesRunner(
+                ModelResponse(
+                    response_id="resp_1",
+                    output_text="done",
+                    tool_calls=[],
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                )
+            )
+            handler = AgentCommandHandler(
+                repository=repository,
+                context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+                responses_runner=runner,
+                config=AppConfig.default(),
+            )
+
+            await handler(
+                EventEnvelope.new(
+                    event_type=EventType.SNAPSHOT_READY,
+                    analysis_id=analysis_id,
+                    agent_id=agent_id,
+                    snapshot_id=snapshot_id,
+                    payload={},
+                )
+            )
+            requests.append(runner.requests[0])
+
+        self.assertEqual(requests[0]["prompt_cache_key"], requests[1]["prompt_cache_key"])
+
+    async def test_prompt_cache_key_uses_agent_thread_granularity(self) -> None:
+        snapshot_id = new_uuid7()
+        requests: list[dict] = []
+        for _ in range(2):
+            repository = FakeAgentRepository(
+                session=AgentSessionState(
+                    analysis_id=new_uuid7(),
+                    agent_id=new_uuid7(),
+                    snapshot_id=snapshot_id,
+                    config_snapshot_id=new_uuid7(),
+                    status="queued",
+                    effective_model="gpt-5.5",
+                    latest_response_id=None,
+                    turn_count=0,
+                    max_turns=10,
+                    effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                    effective_runtime_json={
+                        "reasoning_effort": "low",
+                        "parallel_tool_calls": False,
+                        "prompt_cache_retention": "24h",
+                    },
+                ),
+                turn_id=new_uuid7(),
+                tool_call_id=new_uuid7(),
+            )
+            runner = FakeResponsesRunner(
+                ModelResponse(
+                    response_id="resp_1",
+                    output_text="done",
+                    tool_calls=[],
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                )
+            )
+            handler = AgentCommandHandler(
+                repository=repository,
+                context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+                responses_runner=runner,
+                config=AppConfig.default(),
+            )
+
+            await handler(
+                EventEnvelope.new(
+                    event_type=EventType.SNAPSHOT_READY,
+                    analysis_id=repository.session.analysis_id,
+                    agent_id=repository.session.agent_id,
+                    snapshot_id=snapshot_id,
+                    payload={},
+                )
+            )
+            requests.append(runner.requests[0])
+
+        self.assertNotEqual(requests[0]["prompt_cache_key"], requests[1]["prompt_cache_key"])
+
+    async def test_responses_request_omits_prompt_cache_retention_when_session_runtime_disables_it(self) -> None:
+        analysis_id = new_uuid7()
+        agent_id = new_uuid7()
+        snapshot_id = new_uuid7()
+        repository = FakeAgentRepository(
+            session=AgentSessionState(
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                config_snapshot_id=new_uuid7(),
+                status="queued",
+                effective_model="gpt-5.5",
+                latest_response_id=None,
+                turn_count=0,
+                max_turns=10,
+                effective_limits_json={"auto_compact_threshold_tokens": 120000},
+                effective_runtime_json={
+                    "reasoning_effort": "low",
+                    "parallel_tool_calls": False,
+                    "prompt_cache_retention": None,
+                },
+            ),
+            turn_id=new_uuid7(),
+            tool_call_id=new_uuid7(),
+        )
+        handler = AgentCommandHandler(
+            repository=repository,
+            context_assembler=ContextAssembler(repository=repository, storage=FakeStorage()),
+            responses_runner=FakeResponsesRunner(
+                ModelResponse(
+                    response_id="resp_1",
+                    output_text="done",
+                    tool_calls=[],
+                    usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                )
+            ),
+            config=AppConfig.default(),
+        )
+
+        await handler(
+            EventEnvelope.new(
+                event_type=EventType.SNAPSHOT_READY,
+                analysis_id=analysis_id,
+                agent_id=agent_id,
+                snapshot_id=snapshot_id,
+                payload={},
+            )
+        )
+
+        self.assertNotIn("prompt_cache_retention", handler._responses_runner.requests[0])
+
     async def test_responses_request_includes_reasoning_summary_from_session_runtime_snapshot(self) -> None:
         analysis_id = new_uuid7()
         agent_id = new_uuid7()
@@ -3217,13 +3694,13 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
                 latest_response_id=None,
                 turn_count=3,
                 max_turns=10,
-                effective_limits_json={"auto_compact_threshold_tokens": 500},
+                effective_limits_json={"auto_compact_threshold_tokens": 6000},
                 effective_runtime_json={"reasoning_effort": "medium", "parallel_tool_calls": False},
             ),
             turn_id=new_uuid7(),
             tool_call_id=new_uuid7(),
             context_item_batches=[
-                [{"role": "user", "content": [{"type": "input_text", "text": "PRE_COMPACT_CONTEXT " + ("x" * 800)}]}],
+                [{"role": "user", "content": [{"type": "input_text", "text": "PRE_COMPACT_CONTEXT " + ("x" * 30000)}]}],
                 [{"role": "user", "content": [{"type": "input_text", "text": "POST_COMPACT_MEMORY"}]}],
             ],
         )
@@ -3340,6 +3817,8 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(runner.compaction_requests), 1)
         self.assertEqual(runner.compaction_requests[0]["model"], "gpt-5.5")
+        self.assertEqual(runner.compaction_requests[0]["prompt_cache_key"], runner.requests[0]["prompt_cache_key"])
+        self.assertEqual(runner.compaction_requests[0]["prompt_cache_retention"], "24h")
         self.assertIn("PRE_COMPACT_CONTEXT", json.dumps(runner.compaction_requests[0]["input"], ensure_ascii=False))
         self.assertEqual(runner.requests[0]["input"], compacted_window)
         self.assertNotIn("previous_response_id", runner.requests[0])
@@ -3424,6 +3903,8 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             [request.get("metadata", {}).get("purpose") for request in runner.requests],
             ["remote_compact_v2", None],
         )
+        self.assertEqual(runner.requests[0]["prompt_cache_key"], runner.requests[1]["prompt_cache_key"])
+        self.assertEqual(runner.requests[0]["prompt_cache_retention"], "24h")
         self.assertEqual(runner.requests[0]["input"][-1], {"type": "compaction_trigger"})
         self.assertTrue(runner.requests[0]["parallel_tool_calls"])
         self.assertEqual(repository.memory_summaries, [])
@@ -3506,6 +3987,8 @@ class AgentCoreTest(unittest.IsolatedAsyncioTestCase):
             [request.get("metadata", {}).get("purpose") for request in runner.requests],
             ["remote_compact_v2", "local_compact", None],
         )
+        self.assertEqual(runner.requests[1]["prompt_cache_key"], runner.requests[2]["prompt_cache_key"])
+        self.assertEqual(runner.requests[1]["prompt_cache_retention"], "24h")
         self.assertEqual(repository.compacted_windows[0]["compaction_id"], "resp_local_compact")
         self.assertEqual(repository.compacted_windows[0]["strategy"], "local_model")
 

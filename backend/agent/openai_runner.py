@@ -511,31 +511,44 @@ def parse_response_payload(payload: dict[str, Any]) -> ModelResponse:
                     arguments=_json_object(arguments),
                 )
             )
-    usage = _object_or_empty(payload.get("usage"))
+    usage = _response_usage(payload.get("usage"))
     return ModelResponse(
         response_id=str(payload["id"]),
         output_text="".join(output_text_parts),
         tool_calls=tool_calls,
-        usage={
-            "input_tokens": int(usage.get("input_tokens", 0) or 0),
-            "output_tokens": int(usage.get("output_tokens", 0) or 0),
-            "total_tokens": int(usage.get("total_tokens", 0) or 0),
-        },
+        usage=usage,
         output_items=output_items,
     )
 
 
 def parse_compaction_payload(payload: dict[str, Any]) -> CompactionResponse:
-    usage = _object_or_empty(payload.get("usage"))
     return CompactionResponse(
         compaction_id=str(payload.get("id") or ""),
         output=_object_list(payload.get("output")),
-        usage={
-            "input_tokens": int(usage.get("input_tokens", 0) or 0),
-            "output_tokens": int(usage.get("output_tokens", 0) or 0),
-            "total_tokens": int(usage.get("total_tokens", 0) or 0),
-        },
+        usage=_response_usage(payload.get("usage")),
     )
+
+
+def _response_usage(value: Any) -> dict[str, int]:
+    usage = _object_or_empty(value)
+    input_tokens = _int_usage_value(usage.get("input_tokens"))
+    output_tokens = _int_usage_value(usage.get("output_tokens"))
+    total_tokens = _int_usage_value(usage.get("total_tokens"))
+    input_details = _object_or_empty(usage.get("input_tokens_details"))
+    output_details = _object_or_empty(usage.get("output_tokens_details"))
+    cached_input_tokens = _int_usage_value(input_details.get("cached_tokens"))
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "uncached_input_tokens": max(input_tokens - cached_input_tokens, 0),
+        "reasoning_tokens": _int_usage_value(output_details.get("reasoning_tokens")),
+    }
+
+
+def _int_usage_value(value: Any) -> int:
+    return max(int(value or 0), 0)
 
 
 def parse_stream_event(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:

@@ -198,13 +198,29 @@ class PostgresAgentRepositoryTest(unittest.IsolatedAsyncioTestCase):
             previous_response_id="resp_0",
             input_ref="agent-inputs/a/t.json",
             output_ref="agent-outputs/a/t.json",
-            usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+            usage={
+                "input_tokens": 10,
+                "cached_input_tokens": 7,
+                "uncached_input_tokens": 3,
+                "output_tokens": 2,
+                "reasoning_tokens": 1,
+                "total_tokens": 12,
+            },
         )
 
         executed_sql = str(connection.executed[0][0])
         params = connection.executed[0][1]
         self.assertIn("output_ref = :output_ref", executed_sql)
+        self.assertIn("cached_input_token_count = :cached_input_token_count", executed_sql)
+        self.assertIn("uncached_input_token_count = :uncached_input_token_count", executed_sql)
+        self.assertIn("reasoning_token_count = :reasoning_token_count", executed_sql)
         self.assertEqual(params["output_ref"], "agent-outputs/a/t.json")
+        self.assertEqual(params["input_token_count"], 10)
+        self.assertEqual(params["cached_input_token_count"], 7)
+        self.assertEqual(params["uncached_input_token_count"], 3)
+        self.assertEqual(params["output_token_count"], 2)
+        self.assertEqual(params["reasoning_token_count"], 1)
+        self.assertEqual(params["total_token_count"], 12)
         self.assertEqual(params["turn_id"], turn_id)
 
     async def test_append_context_item_allocates_agent_seq_and_persists_payload(self) -> None:

@@ -75,6 +75,35 @@ class OpenAIRunnerTest(unittest.TestCase):
 
         self.assertEqual(captured_bodies[0]["previous_response_id"], "resp_1")
 
+    def test_http_runner_passes_prompt_cache_controls_in_responses_body(self) -> None:
+        captured_bodies = []
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            captured_bodies.append(json.loads(request.data.decode()))
+            return FakeJsonResponse(
+                {
+                    "id": "resp_1",
+                    "output": [],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                }
+            )
+
+        runner = OpenAIResponsesRunner(api_key="test-key")
+
+        with patch("backend.agent.openai_runner.urllib.request.urlopen", fake_urlopen):
+            runner._create_response_sync(
+                {
+                    "model": "gpt-5.5",
+                    "input": [{"role": "user", "content": "analyze"}],
+                    "prompt_cache_key": "deepdive:cache-key",
+                    "prompt_cache_retention": "24h",
+                }
+            )
+
+        self.assertEqual(captured_bodies[0]["prompt_cache_key"], "deepdive:cache-key")
+        self.assertEqual(captured_bodies[0]["prompt_cache_retention"], "24h")
+
     def test_http_runner_compacts_response_window(self) -> None:
         captured_requests = []
         compacted_output = [
@@ -294,6 +323,26 @@ class OpenAIRunnerTest(unittest.TestCase):
         self.assertEqual(response.tool_calls[0].arguments, {"path": "backend/api/app.py"})
         self.assertEqual(response.usage["total_tokens"], 5)
         self.assertEqual(response.output_items, output_items)
+
+    def test_parse_response_payload_preserves_cached_input_token_usage_details(self) -> None:
+        response = parse_response_payload(
+            {
+                "id": "resp_1",
+                "output": [],
+                "usage": {
+                    "input_tokens": 25500,
+                    "input_tokens_details": {"cached_tokens": 17500},
+                    "output_tokens": 100,
+                    "output_tokens_details": {"reasoning_tokens": 42},
+                    "total_tokens": 25600,
+                },
+            }
+        )
+
+        self.assertEqual(response.usage["input_tokens"], 25500)
+        self.assertEqual(response.usage["cached_input_tokens"], 17500)
+        self.assertEqual(response.usage["uncached_input_tokens"], 8000)
+        self.assertEqual(response.usage["reasoning_tokens"], 42)
 
     def test_parse_response_payload_preserves_reasoning_and_phase_output_items(self) -> None:
         output_items = [

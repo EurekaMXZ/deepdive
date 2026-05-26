@@ -232,7 +232,10 @@ CREATE TABLE agent_turns (
     input_ref text,
     output_ref text,
     input_token_count integer,
+    cached_input_token_count integer,
+    uncached_input_token_count integer,
     output_token_count integer,
+    reasoning_token_count integer,
     total_token_count integer,
     created_at timestamptz not null,
     completed_at timestamptz

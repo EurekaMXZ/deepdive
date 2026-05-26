@@ -89,6 +89,7 @@ class EnvConfigTest(unittest.TestCase):
                 "OPENAI_SERVICE_TIER": "default",
                 "OPENAI_PARALLEL_TOOL_CALLS": "true",
                 "OPENAI_USE_PREVIOUS_RESPONSE_ID": "true",
+                "OPENAI_PROMPT_CACHE_RETENTION": "24h",
                 "OPENAI_TRANSPORT": "websocket_v2",
                 "API_SHOW_MODEL_REASONING_SUMMARY": "false",
             },
@@ -102,8 +103,33 @@ class EnvConfigTest(unittest.TestCase):
         self.assertEqual(config.openai.service_tier, "default")
         self.assertFalse(config.openai.parallel_tool_calls)
         self.assertTrue(config.openai.use_previous_response_id)
+        self.assertEqual(config.openai.prompt_cache_retention, "24h")
         self.assertEqual(config.openai.transport, "websocket_v2")
         self.assertFalse(config.openai.show_reasoning_summary)
+
+    def test_openai_config_defaults_to_stateless_replay_with_extended_prompt_cache(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"DEEPDIVE_ENV_FILE": str(Path(tempfile.gettempdir()) / "deepdive-missing.env")},
+            clear=True,
+        ):
+            config = load_app_config_from_env()
+
+        self.assertFalse(config.openai.use_previous_response_id)
+        self.assertEqual(config.openai.prompt_cache_retention, "24h")
+
+    def test_openai_prompt_cache_retention_can_be_disabled_from_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DEEPDIVE_ENV_FILE": str(Path(tempfile.gettempdir()) / "deepdive-missing.env"),
+                "OPENAI_PROMPT_CACHE_RETENTION": "none",
+            },
+            clear=True,
+        ):
+            config = load_app_config_from_env()
+
+        self.assertIsNone(config.openai.prompt_cache_retention)
 
     def test_load_app_config_from_env_uses_full_backend_settings_from_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -117,6 +143,7 @@ class EnvConfigTest(unittest.TestCase):
                         "OPENAI_SERVICE_TIER=default",
                         "OPENAI_PARALLEL_TOOL_CALLS=true",
                         "OPENAI_USE_PREVIOUS_RESPONSE_ID=true",
+                        "OPENAI_PROMPT_CACHE_RETENTION=24h",
                         "OPENAI_TRANSPORT=websocket_v2",
                         "API_SHOW_MODEL_REASONING_SUMMARY=false",
                         "PROMPT_SYSTEM_INSTRUCTION_FILE=prompts/custom-system.md",
@@ -158,6 +185,7 @@ class EnvConfigTest(unittest.TestCase):
         self.assertEqual(config.openai.service_tier, "default")
         self.assertFalse(config.openai.parallel_tool_calls)
         self.assertTrue(config.openai.use_previous_response_id)
+        self.assertEqual(config.openai.prompt_cache_retention, "24h")
         self.assertEqual(config.openai.transport, "websocket_v2")
         self.assertFalse(config.openai.show_reasoning_summary)
 
@@ -226,6 +254,7 @@ class EnvConfigTest(unittest.TestCase):
                     "service_tier": "priority",
                     "parallel_tool_calls": False,
                     "use_previous_response_id": True,
+                    "prompt_cache_retention": "24h",
                     "transport": "websocket_v2",
                     "show_reasoning_summary": False,
                 }
@@ -233,8 +262,14 @@ class EnvConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(config.openai.reasoning_summary, "detailed")
+        self.assertEqual(config.openai.prompt_cache_retention, "24h")
         self.assertEqual(config.openai.transport, "websocket_v2")
         self.assertFalse(config.openai.show_reasoning_summary)
+
+    def test_app_config_from_json_can_disable_prompt_cache_retention(self) -> None:
+        config = app_config_from_json({"openai": {"prompt_cache_retention": None}})
+
+        self.assertIsNone(config.openai.prompt_cache_retention)
 
     def test_web_search_config_loads_without_serializing_tavily_api_key(self) -> None:
         with patch.dict(
