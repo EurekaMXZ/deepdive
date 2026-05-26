@@ -17,7 +17,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_create_analysis_returns_queued_resource(self) -> None:
         response = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/example/project.git",
                 "ref": "main",
@@ -35,7 +35,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_create_analysis_batch_returns_pending_items(self) -> None:
         response = self.client.post(
-            "/analysis/batches",
+            "/api/analysis/batches",
             json={
                 "max_parallel": 2,
                 "items": [
@@ -70,7 +70,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_create_analysis_batch_rejects_repository_url_credentials(self) -> None:
         response = self.client.post(
-            "/analysis/batches",
+            "/api/analysis/batches",
             json={
                 "max_parallel": 2,
                 "items": [
@@ -88,7 +88,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_create_analysis_rejects_repository_url_credentials(self) -> None:
         response = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://token123@github.com/example/private.git",
                 "ref": "main",
@@ -106,7 +106,7 @@ class AnalysisApiTest(unittest.TestCase):
         ):
             with self.subTest(repository_url=repository_url):
                 response = self.client.post(
-                    "/analysis",
+                    "/api/analysis",
                     json={
                         "repository_url": repository_url,
                         "ref": "main",
@@ -119,7 +119,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_create_analysis_rejects_unregistered_profile_id(self) -> None:
         response = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/example/project.git",
                 "ref": "main",
@@ -133,7 +133,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_created_analysis_can_be_listed_and_read(self) -> None:
         created = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/example/project.git",
                 "ref": "main",
@@ -141,8 +141,8 @@ class AnalysisApiTest(unittest.TestCase):
             headers=self.headers,
         ).json()
 
-        listed = self.client.get("/analysis", headers=self.headers)
-        detail = self.client.get(f"/analysis/{created['analysis_id']}", headers=self.headers)
+        listed = self.client.get("/api/analysis", headers=self.headers)
+        detail = self.client.get(f"/api/analysis/{created['analysis_id']}", headers=self.headers)
 
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()["items"][0]["analysis_id"], created["analysis_id"])
@@ -154,7 +154,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_analysis_list_supports_cursor_pagination(self) -> None:
         first = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/example/first.git",
                 "ref": "main",
@@ -162,7 +162,7 @@ class AnalysisApiTest(unittest.TestCase):
             headers=self.headers,
         ).json()
         second = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/example/second.git",
                 "ref": "main",
@@ -170,9 +170,9 @@ class AnalysisApiTest(unittest.TestCase):
             headers=self.headers,
         ).json()
 
-        page_one = self.client.get("/analysis", params={"limit": 1}, headers=self.headers)
+        page_one = self.client.get("/api/analysis", params={"limit": 1}, headers=self.headers)
         page_two = self.client.get(
-            "/analysis",
+            "/api/analysis",
             params={"limit": 1, "cursor": page_one.json()["next_cursor"]},
             headers=self.headers,
         )
@@ -185,7 +185,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_analysis_suggestions_return_recent_matching_repository_without_full_list(self) -> None:
         matching = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/openai/codex.git",
                 "ref": "main",
@@ -193,7 +193,7 @@ class AnalysisApiTest(unittest.TestCase):
             headers=self.headers,
         ).json()
         self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/example/other.git",
                 "ref": "main",
@@ -202,7 +202,7 @@ class AnalysisApiTest(unittest.TestCase):
         )
 
         response = self.client.get(
-            "/analysis/suggestions",
+            "/api/analysis/suggestions",
             params={"repository_query": "openai/codex", "limit": 6},
             headers=self.headers,
         )
@@ -216,7 +216,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_analysis_suggestions_support_repository_prefix_queries(self) -> None:
         matching = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/openai/codex.git",
                 "ref": "main",
@@ -224,7 +224,7 @@ class AnalysisApiTest(unittest.TestCase):
             headers=self.headers,
         ).json()
         self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/vercel/next.js.git",
                 "ref": "main",
@@ -233,7 +233,7 @@ class AnalysisApiTest(unittest.TestCase):
         )
 
         response = self.client.get(
-            "/analysis/suggestions",
+            "/api/analysis/suggestions",
             params={"repository_query": "openai/co", "limit": 6},
             headers=self.headers,
         )
@@ -245,7 +245,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_repository_search_returns_deduplicated_non_prefix_matches(self) -> None:
         older = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/openai/codex.git",
                 "ref": "main",
@@ -253,7 +253,7 @@ class AnalysisApiTest(unittest.TestCase):
             headers=self.headers,
         ).json()
         latest = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/openai/codex.git",
                 "ref": "release",
@@ -261,7 +261,7 @@ class AnalysisApiTest(unittest.TestCase):
             headers=self.headers,
         ).json()
         self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/vercel/next.js.git",
                 "ref": "main",
@@ -270,7 +270,7 @@ class AnalysisApiTest(unittest.TestCase):
         )
 
         response = self.client.get(
-            "/repositories/search",
+            "/api/repositories/search",
             params={"q": "codex", "limit": 8},
             headers=self.headers,
         )
@@ -288,7 +288,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_repository_search_is_scoped_to_current_user(self) -> None:
         self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/openai/codex.git",
                 "ref": "main",
@@ -298,7 +298,7 @@ class AnalysisApiTest(unittest.TestCase):
         other_headers = self._auth_headers("other-analysis@example.com")
 
         response = self.client.get(
-            "/repositories/search",
+            "/api/repositories/search",
             params={"q": "codex", "limit": 8},
             headers=other_headers,
         )
@@ -308,7 +308,7 @@ class AnalysisApiTest(unittest.TestCase):
 
     def test_cancel_analysis_moves_status_to_cancelling(self) -> None:
         created = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={
                 "repository_url": "https://github.com/example/project.git",
                 "ref": "main",
@@ -316,7 +316,7 @@ class AnalysisApiTest(unittest.TestCase):
             headers=self.headers,
         ).json()
 
-        response = self.client.post(f"/analysis/{created['analysis_id']}/cancel", headers=self.headers)
+        response = self.client.post(f"/api/analysis/{created['analysis_id']}/cancel", headers=self.headers)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "cancelling")
@@ -324,7 +324,7 @@ class AnalysisApiTest(unittest.TestCase):
     def test_unknown_analysis_returns_standard_error(self) -> None:
         missing_id = "019e505e-df2b-7e6f-9a5e-141aa98f59da"
 
-        response = self.client.get(f"/analysis/{missing_id}", headers=self.headers)
+        response = self.client.get(f"/api/analysis/{missing_id}", headers=self.headers)
 
         self.assertEqual(response.status_code, 404)
         body = response.json()
@@ -333,11 +333,11 @@ class AnalysisApiTest(unittest.TestCase):
 
     def _auth_headers(self, email: str = "analysis@example.com") -> dict[str, str]:
         self.client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": email, "password": "correct horse battery staple"},
         )
         tokens = self.client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": email, "password": "correct horse battery staple"},
         ).json()
         return {"Authorization": f"Bearer {tokens['access_token']}"}

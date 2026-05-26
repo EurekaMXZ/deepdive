@@ -79,7 +79,7 @@ class AuthApiTest(unittest.TestCase):
 
     def test_register_login_me_and_refresh_token_flow(self) -> None:
         created = self.client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": "alice@example.com", "password": "correct horse battery staple", "display_name": "Alice"},
         )
 
@@ -88,7 +88,7 @@ class AuthApiTest(unittest.TestCase):
         self.assertNotIn("password", created.text)
 
         logged_in = self.client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": "alice@example.com", "password": "correct horse battery staple"},
         )
 
@@ -101,24 +101,24 @@ class AuthApiTest(unittest.TestCase):
         claims = decode_jwt(tokens["access_token"], secret="deepdive-dev-secret")
         self.assertEqual(claims["exp"] - claims["iat"], 24 * 60 * 60)
 
-        me = self.client.get("/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"})
+        me = self.client.get("/api/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"})
 
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()["email"], "alice@example.com")
         self.assertIn("analysis:create", me.json()["permissions"])
 
-        refreshed = self.client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+        refreshed = self.client.post("/api/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
 
         self.assertEqual(refreshed.status_code, 200)
         self.assertIn("access_token", refreshed.json())
 
-        reused = self.client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+        reused = self.client.post("/api/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
         self.assertEqual(reused.status_code, 401)
         self.assertEqual(reused.json()["error"]["code"], "INVALID_REFRESH_TOKEN")
 
     def test_analysis_requires_jwt(self) -> None:
         response = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={"repository_url": "https://github.com/example/project.git", "ref": "main"},
         )
 
@@ -129,7 +129,7 @@ class AuthApiTest(unittest.TestCase):
         tokens = self._register_and_login("bob@example.com")
 
         response = self.client.post(
-            "/analysis",
+            "/api/analysis",
             json={"repository_url": "https://github.com/example/project.git", "ref": "main"},
             headers={"Authorization": f"Bearer {tokens['access_token']}"},
         )
@@ -139,11 +139,11 @@ class AuthApiTest(unittest.TestCase):
 
     def test_invalid_login_is_rejected(self) -> None:
         self.client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": "eve@example.com", "password": "correct horse battery staple"},
         )
 
-        response = self.client.post("/auth/login", json={"email": "eve@example.com", "password": "wrong"})
+        response = self.client.post("/api/auth/login", json={"email": "eve@example.com", "password": "wrong"})
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["error"]["code"], "INVALID_CREDENTIALS")
@@ -156,7 +156,7 @@ class AuthApiTest(unittest.TestCase):
         client = TestClient(app)
 
         response = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": "guarded@example.com", "password": "correct horse battery staple"},
         )
 
@@ -172,7 +172,7 @@ class AuthApiTest(unittest.TestCase):
         client = TestClient(app)
 
         created = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={
                 "email": "guarded@example.com",
                 "password": "correct horse battery staple",
@@ -180,7 +180,7 @@ class AuthApiTest(unittest.TestCase):
             },
         )
         logged_in = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={
                 "email": "guarded@example.com",
                 "password": "correct horse battery staple",
@@ -203,7 +203,7 @@ class AuthApiTest(unittest.TestCase):
         client = TestClient(app)
 
         response = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={
                 "email": "missing@example.com",
                 "password": "wrong",
@@ -229,7 +229,7 @@ class AuthApiTest(unittest.TestCase):
         app.state.oauth_code_store = InMemoryOAuthCodeStore()
         client = TestClient(app)
 
-        start = client.get("/auth/github/start?redirect_to=/analysis", follow_redirects=False)
+        start = client.get("/api/auth/github/start?redirect_to=/analysis", follow_redirects=False)
         self.assertEqual(start.status_code, 307)
         start_location = start.headers["location"]
         github_query = parse_qs(urlparse(start_location).query)
@@ -237,7 +237,7 @@ class AuthApiTest(unittest.TestCase):
         self.assertEqual(github_query["scope"], ["read:user user:email"])
 
         callback = client.get(
-            f"/auth/github/callback?code=github-code&state={github_query['state'][0]}",
+            f"/api/auth/github/callback?code=github-code&state={github_query['state'][0]}",
             follow_redirects=False,
         )
         self.assertEqual(callback.status_code, 307)
@@ -247,11 +247,11 @@ class AuthApiTest(unittest.TestCase):
         self.assertEqual(urlparse(callback_location).netloc, "frontend.local")
         self.assertEqual(callback_query["redirect_to"], ["/analysis"])
 
-        exchanged = client.post("/auth/exchange", json={"code": callback_query["code"][0]})
+        exchanged = client.post("/api/auth/exchange", json={"code": callback_query["code"][0]})
         self.assertEqual(exchanged.status_code, 200)
         self.assertIn("access_token", exchanged.json())
 
-        me = client.get("/auth/me", headers={"Authorization": f"Bearer {exchanged.json()['access_token']}"})
+        me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {exchanged.json()['access_token']}"})
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()["email"], "octocat@example.com")
         self.assertIn("admin", {role["name"] for role in me.json()["roles"]})
@@ -272,9 +272,9 @@ class AuthApiTest(unittest.TestCase):
         app.state.oauth_code_store = InMemoryOAuthCodeStore()
         client = TestClient(app)
 
-        start = client.get("/auth/github/start", follow_redirects=False)
+        start = client.get("/api/auth/github/start", follow_redirects=False)
         state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
-        callback = client.get(f"/auth/github/callback?code=github-code&state={state}", follow_redirects=False)
+        callback = client.get(f"/api/auth/github/callback?code=github-code&state={state}", follow_redirects=False)
 
         self.assertEqual(callback.status_code, 400)
         self.assertEqual(callback.json()["error"]["code"], "GITHUB_EMAIL_REQUIRED")
@@ -293,10 +293,10 @@ class AuthApiTest(unittest.TestCase):
         app.state.oauth_code_store = InMemoryOAuthCodeStore()
         client = TestClient(app)
 
-        start = client.get("/auth/github/start", follow_redirects=False)
+        start = client.get("/api/auth/github/start", follow_redirects=False)
         state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
-        first = client.get(f"/auth/github/callback?code=github-code&state={state}", follow_redirects=False)
-        second = client.get(f"/auth/github/callback?code=github-code&state={state}", follow_redirects=False)
+        first = client.get(f"/api/auth/github/callback?code=github-code&state={state}", follow_redirects=False)
+        second = client.get(f"/api/auth/github/callback?code=github-code&state={state}", follow_redirects=False)
 
         self.assertEqual(first.status_code, 307)
         self.assertEqual(second.status_code, 400)
@@ -316,12 +316,12 @@ class AuthApiTest(unittest.TestCase):
         app.state.oauth_state_store = InMemoryOAuthStateStore()
         app.state.oauth_code_store = InMemoryOAuthCodeStore()
         client = TestClient(app)
-        start = client.get("/auth/github/start", follow_redirects=False)
+        start = client.get("/api/auth/github/start", follow_redirects=False)
         state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
-        client.get(f"/auth/github/callback?code=github-code&state={state}", follow_redirects=False)
+        client.get(f"/api/auth/github/callback?code=github-code&state={state}", follow_redirects=False)
 
         response = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": "octocat@example.com", "password": "wrong"},
         )
 
@@ -344,22 +344,22 @@ class AuthApiTest(unittest.TestCase):
     def test_disabled_user_cannot_use_existing_access_token(self) -> None:
         admin_tokens = self._register_and_login("admin@example.com")
         created = self.client.post(
-            "/users",
+            "/api/users",
             json={"email": "inactive@example.com", "password": "correct horse battery staple"},
             headers={"Authorization": f"Bearer {admin_tokens['access_token']}"},
         )
         member_tokens = self.client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": "inactive@example.com", "password": "correct horse battery staple"},
         ).json()
 
         self.client.patch(
-            f"/users/{created.json()['id']}",
+            f"/api/users/{created.json()['id']}",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {admin_tokens['access_token']}"},
         )
 
-        response = self.client.get("/auth/me", headers={"Authorization": f"Bearer {member_tokens['access_token']}"})
+        response = self.client.get("/api/auth/me", headers={"Authorization": f"Bearer {member_tokens['access_token']}"})
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["error"]["code"], "INVALID_TOKEN")
@@ -368,19 +368,19 @@ class AuthApiTest(unittest.TestCase):
         admin_tokens = self._register_and_login("admin@example.com")
         headers = {"Authorization": f"Bearer {admin_tokens['access_token']}"}
         self.client.post(
-            "/users",
+            "/api/users",
             json={"email": "first@example.com", "password": "correct horse battery staple"},
             headers=headers,
         )
         self.client.post(
-            "/users",
+            "/api/users",
             json={"email": "second@example.com", "password": "correct horse battery staple"},
             headers=headers,
         )
 
-        page_one = self.client.get("/users", params={"limit": 1}, headers=headers)
+        page_one = self.client.get("/api/users", params={"limit": 1}, headers=headers)
         page_two = self.client.get(
-            "/users",
+            "/api/users",
             params={"limit": 1, "cursor": page_one.json()["next_cursor"]},
             headers=headers,
         )
@@ -392,8 +392,8 @@ class AuthApiTest(unittest.TestCase):
         self.assertIsNotNone(page_one.json()["next_cursor"])
 
     def _register_and_login(self, email: str) -> dict[str, object]:
-        self.client.post("/auth/register", json={"email": email, "password": "correct horse battery staple"})
-        return self.client.post("/auth/login", json={"email": email, "password": "correct horse battery staple"}).json()
+        self.client.post("/api/auth/register", json={"email": email, "password": "correct horse battery staple"})
+        return self.client.post("/api/auth/login", json={"email": email, "password": "correct horse battery staple"}).json()
 
 
 if __name__ == "__main__":

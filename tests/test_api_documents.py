@@ -14,7 +14,7 @@ class ApiDocumentsTest(unittest.TestCase):
         client = TestClient(app)
         headers = _auth_headers(client)
         analysis = client.post(
-            "/analysis",
+            "/api/analysis",
             json={"repository_url": "https://github.com/example/project.git", "ref": "main"},
             headers=headers,
         ).json()
@@ -53,7 +53,7 @@ class ApiDocumentsTest(unittest.TestCase):
             ]
         )
 
-        response = client.get(f"/analysis/{analysis_id}/documents/tree", headers=headers)
+        response = client.get(f"/api/analysis/{analysis_id}/documents/tree", headers=headers)
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -75,11 +75,11 @@ class FakeDocumentService:
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
     client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"email": "documents@example.com", "password": "correct horse battery staple"},
     )
     tokens = client.post(
-        "/auth/login",
+        "/api/auth/login",
         json={"email": "documents@example.com", "password": "correct horse battery staple"},
     ).json()
     return {"Authorization": f"Bearer {tokens['access_token']}"}

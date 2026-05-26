@@ -40,7 +40,7 @@ class ApiSseReplayTest(unittest.TestCase):
         app.state.analysis_service = service
 
         response = client.get(
-            f"/analysis/{analysis_id}/events",
+            f"/api/analysis/{analysis_id}/events",
             headers={**headers, "Last-Event-ID": "1"},
         )
 
@@ -87,7 +87,7 @@ class ApiSseReplayTest(unittest.TestCase):
         app.state.analysis_service = service
 
         response = client.get(
-            f"/analysis/{analysis_id}/events",
+            f"/api/analysis/{analysis_id}/events",
             headers={**headers, "Last-Event-ID": "1"},
         )
 
@@ -144,7 +144,7 @@ class ApiSseReplayTest(unittest.TestCase):
         app.state.analysis_service = service
 
         response = client.get(
-            f"/analysis/{analysis_id}/events",
+            f"/api/analysis/{analysis_id}/events",
             headers={**headers, "Last-Event-ID": "1"},
         )
 
@@ -194,7 +194,7 @@ class ApiSseReplayTest(unittest.TestCase):
         app.state.analysis_service = service
 
         response = client.get(
-            f"/analysis/{analysis_id}/events",
+            f"/api/analysis/{analysis_id}/events",
             headers={**headers, "Last-Event-ID": "1"},
         )
 
@@ -232,7 +232,7 @@ class ApiSseReplayTest(unittest.TestCase):
         app.state.analysis_service = service
 
         response = client.get(
-            f"/analysis/{analysis_id}/events",
+            f"/api/analysis/{analysis_id}/events",
             params={"poll_interval_seconds": 0, "idle_timeout_seconds": 1},
             headers=headers,
         )
@@ -271,7 +271,7 @@ class ApiSseReplayTest(unittest.TestCase):
         app.state.analysis_service = service
 
         response = client.get(
-            f"/analysis/{analysis_id}/events",
+            f"/api/analysis/{analysis_id}/events",
             params={"poll_interval_seconds": 0, "idle_timeout_seconds": 1},
             headers=headers,
         )
@@ -359,11 +359,11 @@ class FakeAnalysisService(InMemoryAnalysisService):
 
 def _auth_headers(client: TestClient) -> dict[str, str]:
     client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"email": "sse@example.com", "password": "correct horse battery staple"},
     )
     tokens = client.post(
-        "/auth/login",
+        "/api/auth/login",
         json={"email": "sse@example.com", "password": "correct horse battery staple"},
     ).json()
     return {"Authorization": f"Bearer {tokens['access_token']}"}

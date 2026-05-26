@@ -35,6 +35,8 @@ from backend.document import DocumentRepository, DocumentService
 from backend.document.repository import PostgresDocumentRepository
 from backend.storage import DEFAULT_OBJECT_BUCKET, InMemoryObjectStorage, MinioObjectStorage
 
+API_PREFIX = "/api"
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="DeepDive Backend")
@@ -93,11 +95,11 @@ def create_app_from_env() -> FastAPI:
 
 
 def _install_routes(app: FastAPI) -> None:
-    app.include_router(auth_router)
-    app.include_router(user_router)
-    app.include_router(role_router)
-    app.include_router(router)
-    app.include_router(document_router)
+    app.include_router(auth_router, prefix=API_PREFIX)
+    app.include_router(user_router, prefix=API_PREFIX)
+    app.include_router(role_router, prefix=API_PREFIX)
+    app.include_router(router, prefix=API_PREFIX)
+    app.include_router(document_router, prefix=API_PREFIX)
     app.add_exception_handler(HTTPException, cast(ExceptionHandler, api_exception_handler))
 
 

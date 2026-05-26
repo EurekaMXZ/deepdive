@@ -6,13 +6,23 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.api.app import create_app_from_env, create_postgres_app
+from backend.api.app import create_app, create_app_from_env, create_postgres_app
 from backend.api.services import InMemoryAnalysisService, PostgresAnalysisService
 from backend.config import AppConfig, OpenAIConfig
 from backend.document import DocumentService
+from fastapi.testclient import TestClient
 
 
 class AppFactoryTest(unittest.TestCase):
+    def test_installs_backend_routes_under_api_prefix(self) -> None:
+        client = TestClient(create_app())
+
+        prefixed = client.get("/api/auth/me")
+        legacy = client.get("/auth/me")
+
+        self.assertEqual(prefixed.status_code, 401)
+        self.assertEqual(legacy.status_code, 404)
+
     def test_create_app_from_env_uses_in_memory_service_without_database_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             missing_env_file = Path(tmpdir) / "missing.env"

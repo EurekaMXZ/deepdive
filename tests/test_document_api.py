@@ -15,7 +15,7 @@ class DocumentApiTest(unittest.IsolatedAsyncioTestCase):
         tokens = _register_and_login(client, "docs@example.com")
         headers = {"Authorization": f"Bearer {tokens['access_token']}"}
         analysis = client.post(
-            "/analysis",
+            "/api/analysis",
             json={"repository_url": "https://github.com/example/project.git", "ref": "main"},
             headers=headers,
         ).json()
@@ -29,17 +29,17 @@ class DocumentApiTest(unittest.IsolatedAsyncioTestCase):
             content="# Review\n\nFindings.",
         )
 
-        listed = client.get(f"/analysis/{analysis['analysis_id']}/documents", headers=headers)
+        listed = client.get(f"/api/analysis/{analysis['analysis_id']}/documents", headers=headers)
         detail = client.get(
-            f"/analysis/{analysis['analysis_id']}/documents/{document['document_id']}",
+            f"/api/analysis/{analysis['analysis_id']}/documents/{document['document_id']}",
             headers=headers,
         )
         content = client.get(
-            f"/analysis/{analysis['analysis_id']}/documents/{document['document_id']}/content",
+            f"/api/analysis/{analysis['analysis_id']}/documents/{document['document_id']}/content",
             headers=headers,
         )
         revisions = client.get(
-            f"/analysis/{analysis['analysis_id']}/documents/{document['document_id']}/revisions",
+            f"/api/analysis/{analysis['analysis_id']}/documents/{document['document_id']}/revisions",
             headers=headers,
         )
 
@@ -61,7 +61,7 @@ class DocumentApiTest(unittest.IsolatedAsyncioTestCase):
         owner_headers = {"Authorization": f"Bearer {owner_tokens['access_token']}"}
         other_headers = {"Authorization": f"Bearer {other_tokens['access_token']}"}
         analysis = client.post(
-            "/analysis",
+            "/api/analysis",
             json={"repository_url": "https://github.com/example/private.git", "ref": "main"},
             headers=owner_headers,
         ).json()
@@ -76,7 +76,7 @@ class DocumentApiTest(unittest.IsolatedAsyncioTestCase):
         )
 
         response = client.get(
-            f"/analysis/{analysis['analysis_id']}/documents/{document['document_id']}/content",
+            f"/api/analysis/{analysis['analysis_id']}/documents/{document['document_id']}/content",
             headers=other_headers,
         )
 
@@ -85,8 +85,8 @@ class DocumentApiTest(unittest.IsolatedAsyncioTestCase):
 
 
 def _register_and_login(client: TestClient, email: str) -> dict[str, object]:
-    client.post("/auth/register", json={"email": email, "password": "correct horse battery staple"})
-    return client.post("/auth/login", json={"email": email, "password": "correct horse battery staple"}).json()
+    client.post("/api/auth/register", json={"email": email, "password": "correct horse battery staple"})
+    return client.post("/api/auth/login", json={"email": email, "password": "correct horse battery staple"}).json()
 
 
 if __name__ == "__main__":

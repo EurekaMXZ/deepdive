@@ -13,7 +13,7 @@ class UserRoleApiTest(unittest.TestCase):
 
     def test_admin_can_create_list_update_disable_users(self) -> None:
         created = self.client.post(
-            "/users",
+            "/api/users",
             json={"email": "member@example.com", "password": "correct horse battery staple", "display_name": "Member"},
             headers=self._auth(),
         )
@@ -21,12 +21,12 @@ class UserRoleApiTest(unittest.TestCase):
         self.assertEqual(created.status_code, 201)
         user_id = created.json()["id"]
 
-        listed = self.client.get("/users", headers=self._auth())
+        listed = self.client.get("/api/users", headers=self._auth())
         self.assertEqual(listed.status_code, 200)
         self.assertIn("member@example.com", {item["email"] for item in listed.json()["items"]})
 
         updated = self.client.patch(
-            f"/users/{user_id}",
+            f"/api/users/{user_id}",
             json={"display_name": "Renamed", "is_active": False},
             headers=self._auth(),
         )
@@ -36,33 +36,33 @@ class UserRoleApiTest(unittest.TestCase):
 
     def test_admin_can_assign_roles_and_permissions(self) -> None:
         created = self.client.post(
-            "/users",
+            "/api/users",
             json={"email": "viewer@example.com", "password": "correct horse battery staple"},
             headers=self._auth(),
         )
         user_id = created.json()["id"]
 
-        roles = self.client.get("/roles", headers=self._auth())
+        roles = self.client.get("/api/roles", headers=self._auth())
         self.assertEqual(roles.status_code, 200)
         viewer_role_id = next(role["id"] for role in roles.json()["items"] if role["name"] == "viewer")
 
-        assigned = self.client.put(f"/users/{user_id}/roles", json={"role_ids": [viewer_role_id]}, headers=self._auth())
+        assigned = self.client.put(f"/api/users/{user_id}/roles", json={"role_ids": [viewer_role_id]}, headers=self._auth())
         self.assertEqual(assigned.status_code, 200)
         self.assertEqual([role["name"] for role in assigned.json()["roles"]], ["viewer"])
 
-        permissions = self.client.get("/permissions", headers=self._auth())
+        permissions = self.client.get("/api/permissions", headers=self._auth())
         self.assertEqual(permissions.status_code, 200)
         self.assertIn("analysis:read", {permission["name"] for permission in permissions.json()["items"]})
 
     def test_assigning_unknown_role_is_rejected(self) -> None:
         created = self.client.post(
-            "/users",
+            "/api/users",
             json={"email": "unknown-role@example.com", "password": "correct horse battery staple"},
             headers=self._auth(),
         )
 
         response = self.client.put(
-            f"/users/{created.json()['id']}/roles",
+            f"/api/users/{created.json()['id']}/roles",
             json={"role_ids": ["019e505e-df2b-7e6f-9a5e-141aa98f59da"]},
             headers=self._auth(),
         )
@@ -73,14 +73,14 @@ class UserRoleApiTest(unittest.TestCase):
     def test_member_cannot_manage_users(self) -> None:
         member_tokens = self._register_and_login("member2@example.com")
 
-        response = self.client.get("/users", headers={"Authorization": f"Bearer {member_tokens['access_token']}"})
+        response = self.client.get("/api/users", headers={"Authorization": f"Bearer {member_tokens['access_token']}"})
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["error"]["code"], "FORBIDDEN")
 
     def _register_and_login(self, email: str) -> dict[str, object]:
-        self.client.post("/auth/register", json={"email": email, "password": "correct horse battery staple"})
-        return self.client.post("/auth/login", json={"email": email, "password": "correct horse battery staple"}).json()
+        self.client.post("/api/auth/register", json={"email": email, "password": "correct horse battery staple"})
+        return self.client.post("/api/auth/login", json={"email": email, "password": "correct horse battery staple"}).json()
 
     def _auth(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.admin_tokens['access_token']}"}
